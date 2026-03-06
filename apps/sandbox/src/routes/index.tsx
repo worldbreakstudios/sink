@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
+import { useLiveQuery } from '@tanstack/react-db'
 import {
-  createSqliteDemoDatabase,
-  FrontendSqliteDatabase,
+  createSqliteDemoCollectionsWorkspace,
+  type NoteRecord,
+  type NotebookRecord,
+  type SqliteDemoCollectionsWorkspace,
+  type SqliteDemoTableName,
   type SqliteExplorerSnapshot,
 } from '@sink/lib'
 
 export const Route = createFileRoute('/')({ component: App })
+
+type DemoRow = NotebookRecord | NoteRecord
 
 function formatCellValue(value: unknown): string {
   if (value === null) {
@@ -25,7 +31,8 @@ function formatCellValue(value: unknown): string {
 }
 
 function App() {
-  const databaseRef = useRef<FrontendSqliteDatabase | null>(null)
+  const [workspace, setWorkspace] =
+    useState<SqliteDemoCollectionsWorkspace | null>(null)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
@@ -39,79 +46,62 @@ function App() {
     value: string
   } | null>(null)
 
-  const refreshSnapshot = useCallback(() => {
-    if (databaseRef.current === null) {
-      return
-    }
+  const notebooksQuery = useLiveQuery(
+    () => workspace?.notebooksCollection,
+    [workspace],
+  )
+  const notesQuery = useLiveQuery(() => workspace?.notesCollection, [workspace])
 
-    setActionError(null)
-    setSqliteState({
-      status: 'ready',
-      data: databaseRef.current.createExplorerSnapshot(),
-    })
-  }, [])
+  const refreshSnapshot = useCallback(
+    (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
+      setSqliteState({
+        status: 'ready',
+        data: {
+          version: activeWorkspace.database.version,
+          tables: activeWorkspace.inspectTables(),
+        },
+      })
+    },
+    [],
+  )
 
   const loadDemo = useCallback(async () => {
-    databaseRef.current?.close()
-    databaseRef.current = await createSqliteDemoDatabase()
+    const nextWorkspace = await createSqliteDemoCollectionsWorkspace()
+
+    setWorkspace((currentWorkspace) => {
+      currentWorkspace?.close()
+      return nextWorkspace
+    })
 
     setActionError(null)
-    setSqliteState({
-      status: 'ready',
-      data: databaseRef.current.createExplorerSnapshot(),
-    })
-  }, [])
+    refreshSnapshot(nextWorkspace)
+  }, [refreshSnapshot])
 
   useEffect(() => {
-    let cancelled = false
-
-    setSqliteState({ status: 'loading' })
-
-    loadDemo()
-      .then(() => {
-        if (!cancelled) {
-          refreshSnapshot()
-        }
+    loadDemo().catch((error: unknown) => {
+      setSqliteState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown SQLite error',
       })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setSqliteState({
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Unknown SQLite error',
-          })
-        }
-      })
-
-    return () => {
-      cancelled = true
-      databaseRef.current?.close()
-      databaseRef.current = null
-    }
+    })
   }, [loadDemo])
+
+  useEffect(() => {
+    return () => {
+      workspace?.close()
+    }
+  }, [workspace])
+
+  useEffect(() => {
+    if (workspace !== null) {
+      refreshSnapshot(workspace)
+    }
+  }, [workspace, notebooksQuery.data, notesQuery.data, refreshSnapshot])
 
   const tables = sqliteState.data?.tables ?? []
   const selectedTable = useMemo(
     () => tables.find((table) => table.name === selectedTableName) ?? tables[0],
     [selectedTableName, tables],
-  )
-
-  const commitCellEdit = useCallback(
-    (rowId: number, columnName: string, value: string) => {
-      if (databaseRef.current === null || !selectedTable) {
-        return
-      }
-
-      try {
-        databaseRef.current.updateCell(selectedTable.name, rowId, columnName, value)
-        refreshSnapshot()
-        setEditingCell(null)
-      } catch (error) {
-        setActionError(
-          error instanceof Error ? error.message : 'Unable to update SQLite cell.',
-        )
-      }
-    },
-    [refreshSnapshot, selectedTable],
   )
 
   useEffect(() => {
@@ -120,7 +110,48 @@ function App() {
     }
   }, [selectedTableName, tables])
 
+  const notebooksRows = notebooksQuery.data ?? []
+  const notesRows = notesQuery.data ?? []
+  const selectedRows = useMemo(() => {
+    if (selectedTable?.name === 'notes') {
+      return notesRows as DemoRow[]
+    }
+
+    return notebooksRows as DemoRow[]
+  }, [notebooksRows, notesRows, selectedTable?.name])
+
   const columnNames = selectedTable?.columns.map((column) => column.name) ?? []
+  const tableCounts = useMemo(
+    () => ({
+      notebooks: notebooksRows.length,
+      notes: notesRows.length,
+    }),
+    [notebooksRows.length, notesRows.length],
+  )
+
+  const commitCellEdit = useCallback(
+    async (rowId: number, columnName: string, value: string) => {
+      if (workspace === null || selectedTable === undefined) {
+        return
+      }
+
+      try {
+        await workspace.updateCell(
+          selectedTable.name as SqliteDemoTableName,
+          rowId,
+          columnName,
+          value,
+        )
+        setActionError(null)
+        setEditingCell(null)
+      } catch (error) {
+        setActionError(
+          error instanceof Error ? error.message : 'Unable to update SQLite cell.',
+        )
+      }
+    },
+    [selectedTable, workspace],
+  )
 
   return (
     <main className="page-wrap py-8">
@@ -130,7 +161,7 @@ function App() {
             SQLite Sandbox
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            View tables, schema, and stored rows.
+            Live TanStack DB collections backed by SQLite Wasm.
           </p>
         </div>
         <button
@@ -154,7 +185,7 @@ function App() {
 
       {sqliteState.status === 'loading' ? (
         <div className="rounded border border-slate-300 bg-white p-4 text-sm text-slate-500">
-          Loading SQLite database...
+          Loading SQLite collections...
         </div>
       ) : null}
 
@@ -198,7 +229,9 @@ function App() {
                       }`}
                     >
                       <span>{table.name}</span>
-                      <span className="text-xs text-slate-500">{table.rows.length}</span>
+                      <span className="text-xs text-slate-500">
+                        {tableCounts[table.name as SqliteDemoTableName] ?? 0}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -271,14 +304,16 @@ function App() {
               <h3 className="m-0 text-sm font-medium text-slate-900">Rows</h3>
               <button
                 type="button"
-                onClick={() => {
-                  if (databaseRef.current === null) {
+                onClick={async () => {
+                  if (workspace === null || selectedTable === undefined) {
                     return
                   }
 
                   try {
-                    databaseRef.current.insertRow(selectedTable.name)
-                    refreshSnapshot()
+                    await workspace.insertRow(
+                      selectedTable.name as SqliteDemoTableName,
+                    )
+                    setActionError(null)
                   } catch (error) {
                     setActionError(
                       error instanceof Error
@@ -293,7 +328,7 @@ function App() {
               </button>
             </div>
 
-            {selectedTable.rows.length === 0 ? (
+            {selectedRows.length === 0 ? (
               <div className="p-4 text-sm text-slate-500">No rows in this table.</div>
             ) : (
               <div className="overflow-x-auto">
@@ -311,75 +346,84 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedTable.rows.map((row) => (
-                      <tr key={`${selectedTable.name}-${row.rowId}`}>
-                        {columnNames.map((columnName) => (
-                          <td
-                            key={`${selectedTable.name}-${row.rowId}-${columnName}`}
-                            className="border-b border-slate-200 px-3 py-2 align-top text-slate-700"
-                          >
-                            {editingCell?.rowId === row.rowId &&
-                            editingCell.columnName === columnName ? (
-                              <input
-                                autoFocus
-                                value={editingCell.value}
-                                onChange={(event) =>
-                                  setEditingCell({
-                                    rowId: row.rowId,
-                                    columnName,
-                                    value: event.target.value,
-                                  })
-                                }
-                                onBlur={() =>
-                                  commitCellEdit(
-                                    row.rowId,
-                                    columnName,
-                                    editingCell.value,
-                                  )
-                                }
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter') {
+                    {selectedRows.map((row) => {
+                      const rowId = Number(row.id)
+
+                      return (
+                        <tr key={`${selectedTable.name}-${rowId}`}>
+                          {columnNames.map((columnName) => (
+                            <td
+                              key={`${selectedTable.name}-${rowId}-${columnName}`}
+                              className="border-b border-slate-200 px-3 py-2 align-top text-slate-700"
+                            >
+                              {editingCell?.rowId === rowId &&
+                              editingCell.columnName === columnName ? (
+                                <input
+                                  autoFocus
+                                  value={editingCell.value}
+                                  onChange={(event) =>
+                                    setEditingCell({
+                                      rowId,
+                                      columnName,
+                                      value: event.target.value,
+                                    })
+                                  }
+                                  onBlur={() =>
                                     commitCellEdit(
-                                      row.rowId,
+                                      rowId,
                                       columnName,
                                       editingCell.value,
                                     )
                                   }
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                      commitCellEdit(
+                                        rowId,
+                                        columnName,
+                                        editingCell.value,
+                                      )
+                                    }
 
-                                  if (event.key === 'Escape') {
-                                    setEditingCell(null)
+                                    if (event.key === 'Escape') {
+                                      setEditingCell(null)
+                                    }
+                                  }}
+                                  className="w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none"
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditingCell({
+                                      rowId,
+                                      columnName,
+                                      value: formatCellValue(
+                                        (row as unknown as Record<string, unknown>)[columnName] ??
+                                          null,
+                                      ),
+                                    })
                                   }
-                                }}
-                                className="w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none"
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditingCell({
-                                    rowId: row.rowId,
-                                    columnName,
-                                    value: formatCellValue(
-                                      row.values[columnName] ?? null,
-                                    ),
-                                  })
-                                }
-                                className="w-full text-left"
-                              >
-                                {formatCellValue(row.values[columnName] ?? null)}
-                              </button>
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
+                                  className="w-full text-left"
+                                >
+                                  {formatCellValue(
+                                    (row as unknown as Record<string, unknown>)[columnName] ??
+                                      null,
+                                  )}
+                                </button>
+                              )}
+                            </td>
+                          ))}
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
 
             <div className="border-t border-slate-300 px-4 py-3 text-xs text-slate-500">
-              Click a cell to edit it.
+              Click a cell to edit it. Rows update through TanStack DB collections and
+              persist back into SQLite.
             </div>
           </div>
         </section>

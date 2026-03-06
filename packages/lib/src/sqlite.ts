@@ -120,6 +120,44 @@ export class FrontendSqliteDatabase {
     }))
   }
 
+  getTableColumns(tableName: string): SqliteTableColumn[] {
+    return this.query<SqliteTableColumn>(
+      `PRAGMA table_info("${escapeIdentifier(tableName)}");`,
+    )
+  }
+
+  coerceTableValue(
+    tableName: string,
+    columnName: string,
+    rawValue: string,
+  ): SqlValue {
+    const column = this.getTableColumns(tableName).find(
+      (candidate) => candidate.name === columnName,
+    )
+
+    if (!column) {
+      throw new Error(`Column "${columnName}" not found in table "${tableName}".`)
+    }
+
+    return coerceInputValue(column, rawValue)
+  }
+
+  createInsertableRow(tableName: string): SqliteRow {
+    const columns = this.getTableColumns(tableName)
+    const row: SqliteRow = {}
+
+    for (const column of columns) {
+      if (isGeneratedPrimaryKey(column)) {
+        row[column.name] = this.getNextPrimaryKeyValue(tableName, column.name)
+        continue
+      }
+
+      row[column.name] = createDefaultValueForColumn(column)
+    }
+
+    return row
+  }
+
   updateCell(
     tableName: string,
     rowId: number,
@@ -163,10 +201,12 @@ export class FrontendSqliteDatabase {
     )
   }
 
-  private getTableColumns(tableName: string): SqliteTableColumn[] {
-    return this.query<SqliteTableColumn>(
-      `PRAGMA table_info("${escapeIdentifier(tableName)}");`,
+  private getNextPrimaryKeyValue(tableName: string, columnName: string): number {
+    const result = this.query<{ next_id: number | null }>(
+      `SELECT COALESCE(MAX("${escapeIdentifier(columnName)}"), 0) + 1 AS next_id FROM "${escapeIdentifier(tableName)}";`,
     )
+
+    return result[0]?.next_id ?? 1
   }
 
   close(): void {
