@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { runSqliteDemo, type SqliteExplorerSnapshot } from '@sink/lib'
+import {
+  createSqliteDemoDatabase,
+  FrontendSqliteDatabase,
+  type SqliteExplorerSnapshot,
+} from '@sink/lib'
 
 export const Route = createFileRoute('/')({ component: App })
 
@@ -21,23 +25,42 @@ function formatCellValue(value: unknown): string {
 }
 
 function App() {
+  const databaseRef = useRef<FrontendSqliteDatabase | null>(null)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
     error?: string
   }>({ status: 'loading' })
+  const [actionError, setActionError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string>('')
+  const [editingCell, setEditingCell] = useState<{
+    rowId: number
+    columnName: string
+    value: string
+  } | null>(null)
 
-  const loadDemo = useMemo(
-    () => () =>
-      runSqliteDemo()
-        .then((data) => ({ status: 'ready', data }) as const)
-        .catch((error: unknown) => ({
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown SQLite error',
-        }) as const),
-    [],
-  )
+  const refreshSnapshot = useCallback(() => {
+    if (databaseRef.current === null) {
+      return
+    }
+
+    setActionError(null)
+    setSqliteState({
+      status: 'ready',
+      data: databaseRef.current.createExplorerSnapshot(),
+    })
+  }, [])
+
+  const loadDemo = useCallback(async () => {
+    databaseRef.current?.close()
+    databaseRef.current = await createSqliteDemoDatabase()
+
+    setActionError(null)
+    setSqliteState({
+      status: 'ready',
+      data: databaseRef.current.createExplorerSnapshot(),
+    })
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -45,14 +68,24 @@ function App() {
     setSqliteState({ status: 'loading' })
 
     loadDemo()
-      .then((data) => {
+      .then(() => {
         if (!cancelled) {
-          setSqliteState(data)
+          refreshSnapshot()
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setSqliteState({
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown SQLite error',
+          })
         }
       })
 
     return () => {
       cancelled = true
+      databaseRef.current?.close()
+      databaseRef.current = null
     }
   }, [loadDemo])
 
@@ -60,6 +93,25 @@ function App() {
   const selectedTable = useMemo(
     () => tables.find((table) => table.name === selectedTableName) ?? tables[0],
     [selectedTableName, tables],
+  )
+
+  const commitCellEdit = useCallback(
+    (rowId: number, columnName: string, value: string) => {
+      if (databaseRef.current === null || !selectedTable) {
+        return
+      }
+
+      try {
+        databaseRef.current.updateCell(selectedTable.name, rowId, columnName, value)
+        refreshSnapshot()
+        setEditingCell(null)
+      } catch (error) {
+        setActionError(
+          error instanceof Error ? error.message : 'Unable to update SQLite cell.',
+        )
+      }
+    },
+    [refreshSnapshot, selectedTable],
   )
 
   useEffect(() => {
@@ -84,10 +136,14 @@ function App() {
         <button
           type="button"
           onClick={() => {
+            setEditingCell(null)
+            setActionError(null)
             setSqliteState({ status: 'loading' })
-
-            loadDemo().then((data) => {
-              setSqliteState(data)
+            loadDemo().catch((error: unknown) => {
+              setSqliteState({
+                status: 'error',
+                error: error instanceof Error ? error.message : 'Unknown SQLite error',
+              })
             })
           }}
           className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
@@ -110,6 +166,12 @@ function App() {
 
       {sqliteState.status === 'ready' && selectedTable ? (
         <section className="space-y-4">
+          {actionError ? (
+            <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+              {actionError}
+            </div>
+          ) : null}
+
           <div className="overflow-hidden rounded border border-slate-300 bg-white">
             <div className="grid md:grid-cols-[220px_minmax(0,1fr)]">
               <aside className="border-b border-slate-300 md:border-r md:border-b-0">
@@ -124,7 +186,10 @@ function App() {
                     <button
                       key={table.name}
                       type="button"
-                      onClick={() => setSelectedTableName(table.name)}
+                      onClick={() => {
+                        setEditingCell(null)
+                        setSelectedTableName(table.name)
+                      }}
                       aria-pressed={table.name === selectedTable.name}
                       className={`mb-1 flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm last:mb-0 ${
                         table.name === selectedTable.name
@@ -202,8 +267,30 @@ function App() {
           </div>
 
           <div className="rounded border border-slate-300 bg-white">
-            <div className="border-b border-slate-300 px-4 py-3">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-300 px-4 py-3">
               <h3 className="m-0 text-sm font-medium text-slate-900">Rows</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (databaseRef.current === null) {
+                    return
+                  }
+
+                  try {
+                    databaseRef.current.insertRow(selectedTable.name)
+                    refreshSnapshot()
+                  } catch (error) {
+                    setActionError(
+                      error instanceof Error
+                        ? error.message
+                        : 'Unable to insert SQLite row.',
+                    )
+                  }
+                }}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
+              >
+                Add row
+              </button>
             </div>
 
             {selectedTable.rows.length === 0 ? (
@@ -224,14 +311,64 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedTable.rows.map((row, rowIndex) => (
-                      <tr key={`${selectedTable.name}-${rowIndex}`}>
+                    {selectedTable.rows.map((row) => (
+                      <tr key={`${selectedTable.name}-${row.rowId}`}>
                         {columnNames.map((columnName) => (
                           <td
-                            key={`${selectedTable.name}-${rowIndex}-${columnName}`}
+                            key={`${selectedTable.name}-${row.rowId}-${columnName}`}
                             className="border-b border-slate-200 px-3 py-2 align-top text-slate-700"
                           >
-                            {formatCellValue(row[columnName] ?? null)}
+                            {editingCell?.rowId === row.rowId &&
+                            editingCell.columnName === columnName ? (
+                              <input
+                                autoFocus
+                                value={editingCell.value}
+                                onChange={(event) =>
+                                  setEditingCell({
+                                    rowId: row.rowId,
+                                    columnName,
+                                    value: event.target.value,
+                                  })
+                                }
+                                onBlur={() =>
+                                  commitCellEdit(
+                                    row.rowId,
+                                    columnName,
+                                    editingCell.value,
+                                  )
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    commitCellEdit(
+                                      row.rowId,
+                                      columnName,
+                                      editingCell.value,
+                                    )
+                                  }
+
+                                  if (event.key === 'Escape') {
+                                    setEditingCell(null)
+                                  }
+                                }}
+                                className="w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingCell({
+                                    rowId: row.rowId,
+                                    columnName,
+                                    value: formatCellValue(
+                                      row.values[columnName] ?? null,
+                                    ),
+                                  })
+                                }
+                                className="w-full text-left"
+                              >
+                                {formatCellValue(row.values[columnName] ?? null)}
+                              </button>
+                            )}
                           </td>
                         ))}
                       </tr>
@@ -240,6 +377,10 @@ function App() {
                 </table>
               </div>
             )}
+
+            <div className="border-t border-slate-300 px-4 py-3 text-xs text-slate-500">
+              Click a cell to edit it.
+            </div>
           </div>
         </section>
       ) : null}
