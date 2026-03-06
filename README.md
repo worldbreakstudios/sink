@@ -1,8 +1,9 @@
 # Sink Workspace
 
-This repo is set up as a workspace repo with two modules:
+This repo is set up as a workspace repo with three modules:
 
 - `packages/cli-client`: a TypeScript library package with a CLI entrypoint
+- `packages/lib`: a frontend-focused TypeScript library built on SQLite Wasm
 - `apps/sandbox`: a TanStack Start app for testing the library locally
 
 ## Getting started

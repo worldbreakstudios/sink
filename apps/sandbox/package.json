@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@sink/cli-client": "file:../../packages/cli-client",
+    "@sink/lib": "file:../../packages/lib",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
     "@tanstack/react-router": "latest",
