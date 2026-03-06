@@ -25,6 +25,7 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  notFoundComponent: NotFound,
   shellComponent: RootDocument,
 })
 
@@ -50,5 +51,18 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <Scripts />
       </body>
     </html>
+  )
+}
+
+function NotFound() {
+  return (
+    <main className="page-wrap py-8">
+      <div className="rounded-xl border bg-card p-6 text-card-foreground shadow-sm">
+        <h1 className="text-xl font-semibold tracking-tight">Page not found</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The route you requested does not exist in this sandbox.
+        </p>
+      </div>
+    </main>
   )
 }
