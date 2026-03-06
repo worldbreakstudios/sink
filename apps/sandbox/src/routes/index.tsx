@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import {
-  createSqliteDemoCollectionsWorkspace,
-  type NoteRecord,
-  type NotebookRecord,
-  type SqliteDemoCollectionsWorkspace,
-  type SqliteDemoTableName,
   type SqliteExplorerSnapshot,
-  type SqliteInsertDraft,
 } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,6 +31,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  createSqliteDemoCollectionsWorkspace,
+  type NoteRecord,
+  type NotebookRecord,
+  type SqliteDemoCollectionsWorkspace,
+  type SqliteDemoTableName,
+  type SqliteInsertDraft,
+} from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/')({ component: App })

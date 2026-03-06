@@ -1,9 +1,10 @@
 import { createTransaction, type TransactionConfig } from '@tanstack/db'
 import {
   createSqliteCollection,
+  createSqliteDemoDatabase,
+  FrontendSqliteDatabase,
   type SqliteCollection,
-} from './sqlite-collection'
-import { createSqliteDemoDatabase, FrontendSqliteDatabase } from './sqlite'
+} from '@sink/lib'
 
 export interface NotebookRecord {
   id: number
