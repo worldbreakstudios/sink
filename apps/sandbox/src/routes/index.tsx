@@ -6,6 +6,7 @@ import {
   type NoteRecord,
   type NotebookRecord,
   type SqliteDemoCollectionsWorkspace,
+  type SqliteInsertDraft,
   type SqliteDemoTableName,
   type SqliteExplorerSnapshot,
 } from '@sink/lib'
@@ -13,6 +14,9 @@ import {
 export const Route = createFileRoute('/')({ component: App })
 
 type DemoRow = NotebookRecord | NoteRecord
+type PendingInsertTransaction = ReturnType<
+  SqliteDemoCollectionsWorkspace['createBatchTransaction']
+>
 
 function formatCellValue(value: unknown): string {
   if (value === null) {
@@ -44,6 +48,11 @@ function App() {
     rowId: number
     columnName: string
     value: string
+  } | null>(null)
+  const [insertModal, setInsertModal] = useState<{
+    tableName: SqliteDemoTableName
+    draft: SqliteInsertDraft
+    transaction: PendingInsertTransaction
   } | null>(null)
 
   const notebooksQuery = useLiveQuery(
@@ -128,6 +137,10 @@ function App() {
     }),
     [notebooksRows.length, notesRows.length],
   )
+  const modalTable = useMemo(
+    () => tables.find((table) => table.name === insertModal?.tableName),
+    [insertModal?.tableName, tables],
+  )
 
   const commitCellEdit = useCallback(
     async (rowId: number, columnName: string, value: string) => {
@@ -152,6 +165,13 @@ function App() {
     },
     [selectedTable, workspace],
   )
+
+  const closeInsertModal = useCallback(() => {
+    setInsertModal((currentModal) => {
+      currentModal?.transaction.rollback()
+      return null
+    })
+  }, [])
 
   return (
     <main className="page-wrap py-8">
@@ -309,18 +329,19 @@ function App() {
                     return
                   }
 
-                  try {
-                    await workspace.insertRow(
-                      selectedTable.name as SqliteDemoTableName,
-                    )
-                    setActionError(null)
-                  } catch (error) {
-                    setActionError(
-                      error instanceof Error
-                        ? error.message
-                        : 'Unable to insert SQLite row.',
-                    )
-                  }
+                  setEditingCell(null)
+                  setActionError(null)
+
+                  const tableName = selectedTable.name as SqliteDemoTableName
+                  const transaction = workspace.createBatchTransaction({
+                    autoCommit: false,
+                  })
+
+                  setInsertModal({
+                    tableName,
+                    draft: workspace.createInsertDraft(tableName),
+                    transaction,
+                  })
                 }}
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
               >
@@ -422,11 +443,115 @@ function App() {
             )}
 
             <div className="border-t border-slate-300 px-4 py-3 text-xs text-slate-500">
-              Click a cell to edit it. Rows update through TanStack DB collections and
-              persist back into SQLite.
+              Click a cell to edit it. Use Add row to open a transaction-backed insert form.
             </div>
           </div>
         </section>
+      ) : null}
+
+      {insertModal && modalTable ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4">
+          <div className="w-full max-w-lg rounded border border-slate-300 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-300 px-4 py-3">
+              <div>
+                <h2 className="m-0 text-base font-medium text-slate-900">
+                  Add row to {insertModal.tableName}
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Transaction started. The insert runs when you submit.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeInsertModal}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              >
+                Close
+              </button>
+            </div>
+
+            <form
+              className="space-y-4 p-4"
+              onSubmit={async (event) => {
+                event.preventDefault()
+
+                if (workspace === null) {
+                  return
+                }
+
+                try {
+                  workspace.queueInsert(
+                    insertModal.tableName,
+                    insertModal.draft,
+                    insertModal.transaction,
+                  )
+                  await insertModal.transaction.commit()
+                  setActionError(null)
+                  setInsertModal(null)
+                } catch (error) {
+                  setActionError(
+                    error instanceof Error
+                      ? error.message
+                      : 'Unable to insert SQLite row.',
+                  )
+                  setInsertModal({
+                    tableName: insertModal.tableName,
+                    draft: insertModal.draft,
+                    transaction: workspace.createBatchTransaction({
+                      autoCommit: false,
+                    }),
+                  })
+                }
+              }}
+            >
+              {modalTable.columns.map((column) => (
+                <label key={column.name} className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-900">
+                    {column.name}
+                  </span>
+                  <input
+                    value={insertModal.draft[column.name] ?? ''}
+                    onChange={(event) =>
+                      setInsertModal((currentModal) =>
+                        currentModal === null
+                          ? null
+                          : {
+                              ...currentModal,
+                              draft: {
+                                ...currentModal.draft,
+                                [column.name]: event.target.value,
+                              },
+                            },
+                      )
+                    }
+                    className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    {column.type || 'TEXT'}
+                    {column.pk ? ' • primary key' : ''}
+                    {column.notnull ? ' • required' : ''}
+                  </span>
+                </label>
+              ))}
+
+              <div className="flex items-center justify-end gap-2 border-t border-slate-200 pt-4">
+                <button
+                  type="button"
+                  onClick={closeInsertModal}
+                  className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded border border-slate-900 bg-slate-900 px-3 py-2 text-sm text-white"
+                >
+                  Submit row
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       ) : null}
     </main>
   )

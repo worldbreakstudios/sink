@@ -22,6 +22,7 @@ export interface NoteRecord {
 }
 
 export type SqliteDemoTableName = 'notebooks' | 'notes'
+export type SqliteInsertDraft = Record<string, string>
 
 export interface SqliteDemoCollectionsWorkspace {
   database: FrontendSqliteDatabase
@@ -31,6 +32,12 @@ export interface SqliteDemoCollectionsWorkspace {
   createBatchTransaction(
     config?: Omit<TransactionConfig<NotebookRecord | NoteRecord>, 'mutationFn'>,
   ): ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>
+  createInsertDraft(tableName: SqliteDemoTableName): SqliteInsertDraft
+  queueInsert(
+    tableName: SqliteDemoTableName,
+    draft: SqliteInsertDraft,
+    transaction: ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>,
+  ): void
   updateCell(
     tableName: SqliteDemoTableName,
     key: number,
@@ -79,6 +86,40 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
     notesCollection,
     inspectTables: database.inspectTables.bind(database),
     createBatchTransaction,
+    createInsertDraft(tableName) {
+      const row = database.createInsertableRow(tableName)
+
+      return Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, value === null ? '' : String(value)]),
+      )
+    },
+    queueInsert(tableName, draft, transaction) {
+      if (tableName === 'notebooks') {
+        const row = Object.fromEntries(
+          Object.entries(draft).map(([columnName, value]) => [
+            columnName,
+            database.coerceTableValue(tableName, columnName, value),
+          ]),
+        ) as unknown as NotebookRecord
+
+        transaction.mutate(() => {
+          notebooksCollection.insert(row)
+        })
+
+        return
+      }
+
+      const row = Object.fromEntries(
+        Object.entries(draft).map(([columnName, value]) => [
+          columnName,
+          database.coerceTableValue(tableName, columnName, value),
+        ]),
+      ) as unknown as NoteRecord
+
+      transaction.mutate(() => {
+        notesCollection.insert(row)
+      })
+    },
     async updateCell(tableName, key, columnName, value) {
       const typedValue = database.coerceTableValue(tableName, columnName, value)
       const transaction = createBatchTransaction()
