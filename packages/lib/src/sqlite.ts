@@ -7,10 +7,25 @@ import type {
 
 export type SqliteRow = Record<string, SqlValue>
 
-export interface SqliteDemoResult {
-  version: string
-  rowCount: number
+export interface SqliteTableColumn {
+  cid: number
+  name: string
+  type: string
+  notnull: number
+  dflt_value: SqlValue
+  pk: number
+}
+
+export interface SqliteTableSnapshot {
+  name: string
+  schema: string
+  columns: SqliteTableColumn[]
   rows: SqliteRow[]
+}
+
+export interface SqliteExplorerSnapshot {
+  version: string
+  tables: SqliteTableSnapshot[]
 }
 
 let sqlitePromise: Promise<Sqlite3Static> | null = null
@@ -49,7 +64,7 @@ export class FrontendSqliteDatabase {
     this.#db.exec({ sql, bind })
   }
 
-  query<TRow extends SqliteRow = SqliteRow>(
+  query<TRow extends object = SqliteRow>(
     sql: string,
     bind?: BindingSpec,
   ): TRow[] {
@@ -61,6 +76,31 @@ export class FrontendSqliteDatabase {
     }) as TRow[]
   }
 
+  inspectTables(limit = 100): SqliteTableSnapshot[] {
+    const tables = this.query<{
+      name: string
+      sql: string
+    }>(
+      `
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name ASC;
+      `,
+    )
+
+    return tables.map(({ name, sql }) => ({
+      name,
+      schema: sql,
+      columns: this.query<SqliteTableColumn>(
+        `PRAGMA table_info("${escapeIdentifier(name)}");`,
+      ),
+      rows: this.query(
+        `SELECT * FROM "${escapeIdentifier(name)}" ORDER BY rowid ASC LIMIT ${limit};`,
+      ),
+    }))
+  }
+
   close(): void {
     if (this.#db.isOpen()) {
       this.#db.close()
@@ -68,42 +108,72 @@ export class FrontendSqliteDatabase {
   }
 }
 
-export async function runSqliteDemo(label: string): Promise<SqliteDemoResult> {
+function escapeIdentifier(identifier: string): string {
+  return identifier.replaceAll('"', '""')
+}
+
+function normalizeLabel(label: string): string {
+  const trimmed = label.trim().replace(/\s+/g, ' ')
+
+  return trimmed.length === 0 ? 'Untitled record' : trimmed
+}
+
+export async function runSqliteDemo(
+  label = 'Offline-first note store',
+): Promise<SqliteExplorerSnapshot> {
   const db = await FrontendSqliteDatabase.createInMemory()
 
   try {
+    const normalizedLabel = normalizeLabel(label)
+
     db.execute(`
-      CREATE TABLE records (
+      CREATE TABLE notebooks (
         id INTEGER PRIMARY KEY,
-        label TEXT NOT NULL,
-        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE notes (
+        id INTEGER PRIMARY KEY,
+        notebook_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
     `)
 
-    const normalizedLabel = label.trim().replace(/\s+/g, ' ')
-    const slug = normalizedLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    db.execute(
+      `
+        INSERT INTO notebooks (name, description, created_at)
+        VALUES
+          (?, ?, ?),
+          (?, ?, ?);
+      `,
+      [
+        'Inbox',
+        'Quick capture workspace',
+        '2026-03-06T18:00:00.000Z',
+        normalizedLabel,
+        'Demo notebook seeded by the sandbox',
+        '2026-03-06T18:05:00.000Z',
+      ],
+    )
 
     db.execute(
       `
-        INSERT INTO records (label, slug, created_at)
-        VALUES (?, ?, ?);
-      `,
-      [normalizedLabel, slug.replace(/^-|-$/g, ''), new Date().toISOString()],
-    )
-
-    const rows = db.query(
-      `
-        SELECT id, label, slug, created_at
-        FROM records
-        ORDER BY id ASC;
+        INSERT INTO notes (notebook_id, title, body, status, created_at)
+        VALUES
+          (1, 'Capture SQLite wrapper ideas', 'Start with schema inspection and query helpers.', 'open', '2026-03-06T18:10:00.000Z'),
+          (1, 'Support migrations', 'Track schema changes in one place.', 'draft', '2026-03-06T18:12:00.000Z'),
+          (2, 'Prototype table browser', 'Render schemas and row data in the sandbox.', 'open', '2026-03-06T18:15:00.000Z');
       `,
     )
 
     return {
       version: db.version,
-      rowCount: rows.length,
-      rows,
+      tables: db.inspectTables(),
     }
   } finally {
     db.close()

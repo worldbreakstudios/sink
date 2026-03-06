@@ -1,182 +1,248 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import {
-  createSandboxSnapshot,
-  formatCliMessage,
-  tokenizeInput,
-} from '@sink/cli-client'
-import { runSqliteDemo, type SqliteDemoResult } from '@sink/lib'
+import { runSqliteDemo, type SqliteExplorerSnapshot } from '@sink/lib'
 
 export const Route = createFileRoute('/')({ component: App })
 
+function formatCellValue(value: unknown): string {
+  if (value === null) {
+    return 'NULL'
+  }
+
+  if (value instanceof Uint8Array || value instanceof Int8Array) {
+    return `[binary ${value.byteLength} bytes]`
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return `[binary ${value.byteLength} bytes]`
+  }
+
+  return String(value)
+}
+
 function App() {
-  const [input, setInput] = useState('hello sandbox')
-  const [sqliteDemo, setSqliteDemo] = useState<{
+  const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
-    data?: SqliteDemoResult
+    data?: SqliteExplorerSnapshot
     error?: string
   }>({ status: 'loading' })
-  const snapshot = useMemo(() => createSandboxSnapshot(input), [input])
-  const previewArgs = useMemo(() => tokenizeInput(input), [input])
+  const [selectedTableName, setSelectedTableName] = useState<string>('')
+
+  const loadDemo = useMemo(
+    () => () =>
+      runSqliteDemo()
+        .then((data) => ({ status: 'ready', data }) as const)
+        .catch((error: unknown) => ({
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unknown SQLite error',
+        }) as const),
+    [],
+  )
 
   useEffect(() => {
     let cancelled = false
 
-    setSqliteDemo({ status: 'loading' })
+    setSqliteState({ status: 'loading' })
 
-    runSqliteDemo(input)
+    loadDemo()
       .then((data) => {
         if (!cancelled) {
-          setSqliteDemo({ status: 'ready', data })
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setSqliteDemo({
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Unknown SQLite error',
-          })
+          setSqliteState(data)
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [input])
+  }, [loadDemo])
+
+  const tables = sqliteState.data?.tables ?? []
+  const selectedTable = useMemo(
+    () => tables.find((table) => table.name === selectedTableName) ?? tables[0],
+    [selectedTableName, tables],
+  )
+
+  useEffect(() => {
+    if (tables.length > 0 && !tables.some((table) => table.name === selectedTableName)) {
+      setSelectedTableName(tables[0]?.name ?? '')
+    }
+  }, [selectedTableName, tables])
+
+  const columnNames = selectedTable?.columns.map((column) => column.name) ?? []
 
   return (
-    <main className="page-wrap px-4 pb-8 pt-14">
-      <section className="island-shell rise-in relative overflow-hidden rounded-4xl px-6 py-10 sm:px-10 sm:py-14">
-        <div className="pointer-events-none absolute -left-20 -top-24 h-56 w-56 rounded-full bg-[radial-gradient(circle,rgba(79,184,178,0.32),transparent_66%)]" />
-        <div className="pointer-events-none absolute -bottom-20 -right-20 h-56 w-56 rounded-full bg-[radial-gradient(circle,rgba(47,106,74,0.18),transparent_66%)]" />
-        <p className="island-kicker mb-3">Workspace Sandbox</p>
-        <h1 className="display-title mb-5 max-w-3xl text-4xl leading-[1.02] font-bold tracking-tight text-(--sea-ink) sm:text-6xl">
-          Build on top of SQLite Wasm in the browser.
-        </h1>
-        <p className="mb-8 max-w-2xl text-base text-(--sea-ink-soft) sm:text-lg">
-          The sandbox imports both <code>@sink/cli-client</code> and{' '}
-          <code>@sink/lib</code> directly from the workspace so you can test a
-          frontend SQLite data layer alongside the CLI package.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <a
-            href="/about"
-            className="rounded-full border border-[rgba(23,58,64,0.2)] bg-white/50 px-5 py-2.5 text-sm font-semibold text-(--sea-ink) no-underline transition hover:-translate-y-0.5 hover:border-[rgba(23,58,64,0.35)]"
-          >
-            Workspace Notes
-          </a>
-          <button
-            type="button"
-            onClick={() => setInput('Offline-first note store')}
-            className="rounded-full border border-[rgba(50,143,151,0.3)] bg-[rgba(79,184,178,0.14)] px-5 py-2.5 text-sm font-semibold text-(--lagoon-deep) transition hover:-translate-y-0.5 hover:bg-[rgba(79,184,178,0.24)]"
-          >
-            Load Sample Input
-          </button>
+    <main className="page-wrap py-8">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="m-0 text-2xl font-semibold text-slate-900">
+            SQLite Sandbox
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            View tables, schema, and stored rows.
+          </p>
         </div>
-      </section>
+        <button
+          type="button"
+          onClick={() => {
+            setSqliteState({ status: 'loading' })
 
-      <section className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <article className="island-shell rounded-2xl p-6">
-          <p className="island-kicker mb-2">CLI Preview</p>
-          <label
-            htmlFor="sandbox-input"
-            className="mb-3 block text-sm font-semibold text-(--sea-ink)"
-          >
-            Try a label you might store in SQLite
-          </label>
-          <input
-            id="sandbox-input"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="type a command phrase"
-            className="w-full rounded-2xl border border-(--chip-line) bg-white/80 px-4 py-3 text-sm text-(--sea-ink) outline-none transition focus:border-[rgba(50,143,151,0.5)]"
-          />
-          <div className="mt-5 rounded-2xl border border-(--chip-line) bg-[rgba(255,255,255,0.55)] p-4">
-            <p className="m-0 text-sm font-semibold text-(--sea-ink)">
-              CLI output
-            </p>
-            <p className="mt-2 font-mono text-sm text-(--sea-ink-soft)">
-              {`sink ${previewArgs.join(' ')}`.trim()}
-            </p>
-            <p className="mt-3 text-sm text-(--sea-ink-soft)">
-              {formatCliMessage(input)}
-            </p>
+            loadDemo().then((data) => {
+              setSqliteState(data)
+            })
+          }}
+          className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+        >
+          Reload demo database
+        </button>
+      </div>
+
+      {sqliteState.status === 'loading' ? (
+        <div className="rounded border border-slate-300 bg-white p-4 text-sm text-slate-500">
+          Loading SQLite database...
+        </div>
+      ) : null}
+
+      {sqliteState.status === 'error' ? (
+        <div className="rounded border border-red-300 bg-red-50 p-4 text-sm text-red-700">
+          {sqliteState.error}
+        </div>
+      ) : null}
+
+      {sqliteState.status === 'ready' && selectedTable ? (
+        <section className="space-y-4">
+          <div className="overflow-hidden rounded border border-slate-300 bg-white">
+            <div className="grid md:grid-cols-[220px_minmax(0,1fr)]">
+              <aside className="border-b border-slate-300 md:border-r md:border-b-0">
+                <div className="border-b border-slate-300 px-4 py-3">
+                  <p className="m-0 text-sm font-medium text-slate-900">Tables</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    SQLite {sqliteState.data?.version}
+                  </p>
+                </div>
+                <div className="p-2">
+                  {tables.map((table) => (
+                    <button
+                      key={table.name}
+                      type="button"
+                      onClick={() => setSelectedTableName(table.name)}
+                      aria-pressed={table.name === selectedTable.name}
+                      className={`mb-1 flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm last:mb-0 ${
+                        table.name === selectedTable.name
+                          ? 'border-slate-300 bg-slate-100 text-slate-900'
+                          : 'border-transparent bg-transparent text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>{table.name}</span>
+                      <span className="text-xs text-slate-500">{table.rows.length}</span>
+                    </button>
+                  ))}
+                </div>
+              </aside>
+
+              <div>
+                <div className="border-b border-slate-300 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="m-0 text-base font-medium text-slate-900">
+                      {selectedTable.name}
+                    </h2>
+                    <span className="text-xs text-slate-500">Schema view</span>
+                  </div>
+                </div>
+                <div className="grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_320px]">
+                  <div>
+                    <h3 className="mb-2 text-sm font-medium text-slate-900">Schema</h3>
+                    <pre className="overflow-x-auto rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                      {selectedTable.schema}
+                    </pre>
+                  </div>
+                  <div>
+                    <h3 className="mb-2 text-sm font-medium text-slate-900">Columns</h3>
+                    <div className="overflow-x-auto rounded border border-slate-200">
+                      <table className="min-w-full border-collapse text-sm">
+                        <thead className="bg-slate-50 text-left text-slate-600">
+                          <tr>
+                            <th className="border-b border-slate-200 px-3 py-2 font-medium">
+                              Name
+                            </th>
+                            <th className="border-b border-slate-200 px-3 py-2 font-medium">
+                              Type
+                            </th>
+                            <th className="border-b border-slate-200 px-3 py-2 font-medium">
+                              PK
+                            </th>
+                            <th className="border-b border-slate-200 px-3 py-2 font-medium">
+                              Not Null
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedTable.columns.map((column) => (
+                            <tr key={column.name}>
+                              <td className="border-b border-slate-200 px-3 py-2 text-slate-900">
+                                {column.name}
+                              </td>
+                              <td className="border-b border-slate-200 px-3 py-2 text-slate-600">
+                                {column.type || '-'}
+                              </td>
+                              <td className="border-b border-slate-200 px-3 py-2 text-slate-600">
+                                {column.pk ? 'yes' : ''}
+                              </td>
+                              <td className="border-b border-slate-200 px-3 py-2 text-slate-600">
+                                {column.notnull ? 'yes' : ''}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-        </article>
 
-        <article className="island-shell rounded-2xl p-6">
-          <p className="island-kicker mb-2">SQLite Demo</p>
-          <h2 className="mb-4 text-xl font-semibold text-(--sea-ink)">
-            `@sink/lib` now wraps SQLite Wasm for frontend data work.
-          </h2>
-          <p className="mb-2 text-sm font-semibold text-(--sea-ink)">
-            @sink/lib
-          </p>
-          <pre className="overflow-x-auto rounded-2xl bg-[rgba(23,58,64,0.92)] p-4 text-sm text-[rgba(237,249,244,0.92)]">
-            {sqliteDemo.status === 'ready'
-              ? JSON.stringify(sqliteDemo.data, null, 2)
-              : sqliteDemo.status === 'error'
-                ? JSON.stringify({ error: sqliteDemo.error }, null, 2)
-                : JSON.stringify({ status: 'Loading SQLite demo...' }, null, 2)}
-          </pre>
-          <p className="mb-2 mt-5 text-sm font-semibold text-(--sea-ink)">
-            @sink/cli-client
-          </p>
-          <pre className="overflow-x-auto rounded-2xl bg-[rgba(23,58,64,0.92)] p-4 text-sm text-[rgba(237,249,244,0.92)]">
-            {JSON.stringify(snapshot, null, 2)}
-          </pre>
-        </article>
-      </section>
+          <div className="rounded border border-slate-300 bg-white">
+            <div className="border-b border-slate-300 px-4 py-3">
+              <h3 className="m-0 text-sm font-medium text-slate-900">Rows</h3>
+            </div>
 
-      <section className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          [
-            'packages/cli-client',
-            'Shared TypeScript helpers and a CLI entrypoint live together.',
-          ],
-          [
-            'packages/lib',
-            'This package now owns the browser-side SQLite wrapper and future data APIs.',
-          ],
-          [
-            'apps/sandbox',
-            'Use TanStack Start to poke at behavior while building the library.',
-          ],
-          [
-            'npm workspaces',
-            'One install at the repo root links both modules together.',
-          ],
-        ].map(([title, desc], index) => (
-          <article
-            key={title}
-            className="island-shell feature-card rise-in rounded-2xl p-5"
-            style={{ animationDelay: `${index * 90 + 80}ms` }}
-          >
-            <h2 className="mb-2 text-base font-semibold text-(--sea-ink)">
-              {title}
-            </h2>
-            <p className="m-0 text-sm text-(--sea-ink-soft)">{desc}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="island-shell mt-8 rounded-2xl p-6">
-        <p className="island-kicker mb-2">Next Steps</p>
-        <ul className="m-0 list-disc space-y-2 pl-5 text-sm text-(--sea-ink-soft)">
-          <li>
-            Add more pure functions in <code>packages/cli-client/src</code>.
-          </li>
-          <li>
-            Add repository-style helpers in <code>packages/lib/src</code>.
-          </li>
-          <li>
-            Grow the CLI in <code>packages/cli-client/src/cli.ts</code>.
-          </li>
-          <li>
-            Use this sandbox to probe schema, queries, and migration ideas quickly.
-          </li>
-        </ul>
-      </section>
+            {selectedTable.rows.length === 0 ? (
+              <div className="p-4 text-sm text-slate-500">No rows in this table.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse text-sm">
+                  <thead className="bg-slate-50 text-left text-slate-600">
+                    <tr>
+                      {columnNames.map((columnName) => (
+                        <th
+                          key={columnName}
+                          className="border-b border-slate-200 px-3 py-2 font-medium"
+                        >
+                          {columnName}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedTable.rows.map((row, rowIndex) => (
+                      <tr key={`${selectedTable.name}-${rowIndex}`}>
+                        {columnNames.map((columnName) => (
+                          <td
+                            key={`${selectedTable.name}-${rowIndex}-${columnName}`}
+                            className="border-b border-slate-200 px-3 py-2 align-top text-slate-700"
+                          >
+                            {formatCellValue(row[columnName] ?? null)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
     </main>
   )
 }
