@@ -41,7 +41,10 @@ import {
 } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 
-export const Route = createFileRoute('/')({ component: App })
+export const Route = createFileRoute('/')({
+  ssr: false,
+  component: App,
+})
 
 type DemoRow = NotebookRecord | NoteRecord
 type PendingInsertTransaction = ReturnType<

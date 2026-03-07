@@ -17,6 +17,10 @@ const config = defineConfig({
   },
   optimizeDeps: {
     exclude: ['@sqlite.org/sqlite-wasm'],
+    include: ['@tanstack/db'],
+  },
+  resolve: {
+    dedupe: ['@tanstack/db'],
   },
   plugins: [
     devtools(),
