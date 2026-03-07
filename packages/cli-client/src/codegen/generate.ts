@@ -36,3 +36,35 @@ export async function generate(options: GenerateOptions): Promise<void> {
     `Generated schema for ${definitions.length} table${definitions.length === 1 ? '' : 's'} -> ${relOutput}`,
   )
 }
+
+export async function watch(options: GenerateOptions): Promise<void> {
+  const srcDir = path.resolve(options.cwd, 'src')
+
+  await generate(options)
+
+  let timeout: ReturnType<typeof setTimeout> | null = null
+
+  const rebuild = () => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(async () => {
+      try {
+        await generate(options)
+      } catch (err) {
+        console.error('Generate failed:', err)
+      }
+    }, 100)
+  }
+
+  const watcher = fs.watch(srcDir, { recursive: true }, (_event, filename) => {
+    if (filename && filename.endsWith('.schema.ts')) {
+      rebuild()
+    }
+  })
+
+  console.log('Watching for *.schema.ts changes...')
+
+  process.on('SIGINT', () => {
+    watcher.close()
+    process.exit(0)
+  })
+}

@@ -1,5 +1,5 @@
 import { formatCliMessage } from './index'
-import { generate } from './codegen/generate'
+import { generate, watch } from './codegen/generate'
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -9,8 +9,10 @@ if (command === 'generate') {
   const outIdx = args.indexOf('--out')
   const cwd: string = cwdIdx !== -1 ? (args[cwdIdx + 1] ?? '.') : '.'
   const out: string | undefined = outIdx !== -1 ? args[outIdx + 1] : undefined
+  const useWatch = args.includes('--watch')
 
-  generate({ cwd, out }).catch((err) => {
+  const run = useWatch ? watch : generate
+  run({ cwd, out }).catch((err) => {
     console.error(err)
     process.exit(1)
   })

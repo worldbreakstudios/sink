@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import type { TableDefinition } from '@sink/lib'
 
 export async function loadSchemaFiles(
@@ -10,7 +11,8 @@ export async function loadSchemaFiles(
   const seenNames = new Set<string>()
 
   for (const file of files) {
-    const mod = await jiti.import(file) as { default?: TableDefinition }
+    const source = fs.readFileSync(file, 'utf-8')
+    const mod = jiti.evalModule(source, { filename: file }) as { default?: TableDefinition }
     const def = mod.default ?? (mod as unknown as TableDefinition)
 
     if (!def || !def.tableName || !def.columns) {
