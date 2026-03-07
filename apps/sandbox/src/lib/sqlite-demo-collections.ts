@@ -1,10 +1,7 @@
-import { createTransaction, type TransactionConfig } from '@tanstack/db'
-import {
-  createSqliteCollection,
-  createSqliteDemoDatabase,
-  FrontendSqliteDatabase,
-  type SqliteCollection,
-} from '@sink/lib'
+import type { TransactionConfig } from '@tanstack/db'
+import { createTransaction } from '@tanstack/db'
+import type { FrontendSqliteDatabase, SqliteCollection } from '@sink/lib'
+import { createSqliteCollection, createSqliteDemoDatabase } from '@sink/lib'
 
 export interface NotebookRecord {
   id: number
@@ -30,23 +27,23 @@ export interface SqliteDemoCollectionsWorkspace {
   notebooksCollection: SqliteCollection<NotebookRecord, number>
   notesCollection: SqliteCollection<NoteRecord, number>
   inspectTables: FrontendSqliteDatabase['inspectTables']
-  createBatchTransaction(
+  createBatchTransaction: (
     config?: Omit<TransactionConfig<NotebookRecord | NoteRecord>, 'mutationFn'>,
-  ): ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>
-  createInsertDraft(tableName: SqliteDemoTableName): SqliteInsertDraft
-  queueInsert(
+  ) => ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>
+  createInsertDraft: (tableName: SqliteDemoTableName) => SqliteInsertDraft
+  queueInsert: (
     tableName: SqliteDemoTableName,
     draft: SqliteInsertDraft,
     transaction: ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>,
-  ): void
-  updateCell(
+  ) => void
+  updateCell: (
     tableName: SqliteDemoTableName,
     key: number,
     columnName: string,
     value: string,
-  ): Promise<void>
-  insertRow(tableName: SqliteDemoTableName): Promise<void>
-  close(): void
+  ) => Promise<void>
+  insertRow: (tableName: SqliteDemoTableName) => Promise<void>
+  close: () => void
 }
 
 export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemoCollectionsWorkspace> {
