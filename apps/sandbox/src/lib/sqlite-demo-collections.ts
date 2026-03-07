@@ -1,40 +1,26 @@
 import type { TransactionConfig } from '@tanstack/db'
-import { createTransaction } from '@tanstack/db'
-import type { FrontendSqliteDatabase, SqliteCollection } from '@sink/lib'
-import { createSqliteCollection, createSqliteDemoDatabase } from '@sink/lib'
+import { FrontendSqliteDatabase } from '@sink/lib'
+import type { SqliteCollection } from '@sink/lib'
+import { createAllTables, createBatchTransaction, createCollections } from '@/data/generated/schema.gen'
+import type { AnyRow, NotebookRow, NoteRow, TableName } from '@/data/generated/schema.gen'
 
-export interface NotebookRecord {
-  id: number
-  name: string
-  description: string | null
-  created_at: string
-}
-
-export interface NoteRecord {
-  id: number
-  notebook_id: number
-  title: string
-  body: string
-  status: string
-  created_at: string
-}
-
-export type SqliteDemoTableName = 'notebooks' | 'notes'
+export type { NotebookRow as NotebookRecord, NoteRow as NoteRecord }
+export type SqliteDemoTableName = TableName
 export type SqliteInsertDraft = Record<string, string>
 
 export interface SqliteDemoCollectionsWorkspace {
   database: FrontendSqliteDatabase
-  notebooksCollection: SqliteCollection<NotebookRecord, number>
-  notesCollection: SqliteCollection<NoteRecord, number>
+  notebooksCollection: SqliteCollection<NotebookRow, number>
+  notesCollection: SqliteCollection<NoteRow, number>
   inspectTables: FrontendSqliteDatabase['inspectTables']
   createBatchTransaction: (
-    config?: Omit<TransactionConfig<NotebookRecord | NoteRecord>, 'mutationFn'>,
-  ) => ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>
+    config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
+  ) => ReturnType<typeof createBatchTransaction>
   createInsertDraft: (tableName: SqliteDemoTableName) => SqliteInsertDraft
   queueInsert: (
     tableName: SqliteDemoTableName,
     draft: SqliteInsertDraft,
-    transaction: ReturnType<typeof createTransaction<NotebookRecord | NoteRecord>>,
+    transaction: ReturnType<typeof createBatchTransaction>,
   ) => void
   updateCell: (
     tableName: SqliteDemoTableName,
@@ -46,44 +32,56 @@ export interface SqliteDemoCollectionsWorkspace {
   close: () => void
 }
 
+async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
+  const db = await FrontendSqliteDatabase.createInMemory()
+
+  createAllTables(db)
+
+  db.execute(
+    `
+      INSERT INTO notebooks (name, description, created_at)
+      VALUES
+        (?, ?, ?),
+        (?, ?, ?);
+    `,
+    [
+      'Inbox',
+      'Quick capture workspace',
+      '2026-03-06T18:00:00.000Z',
+      'Offline-first note store',
+      'Demo notebook seeded by the sandbox',
+      '2026-03-06T18:05:00.000Z',
+    ],
+  )
+
+  db.execute(
+    `
+      INSERT INTO notes (notebook_id, title, body, status, created_at)
+      VALUES
+        (1, 'Capture SQLite wrapper ideas', 'Start with schema inspection and query helpers.', 'open', '2026-03-06T18:10:00.000Z'),
+        (1, 'Support migrations', 'Track schema changes in one place.', 'draft', '2026-03-06T18:12:00.000Z'),
+        (2, 'Prototype table browser', 'Render schemas and row data in the sandbox.', 'open', '2026-03-06T18:15:00.000Z');
+    `,
+  )
+
+  return db
+}
+
 export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemoCollectionsWorkspace> {
   const database = await createSqliteDemoDatabase()
 
-  const notebooksCollection = createSqliteCollection<NotebookRecord, number>({
-    id: 'sqlite-notebooks',
-    tableName: 'notebooks',
-    keyColumn: 'id',
-    getKey: (row) => row.id,
-    database,
-    orderBy: 'id ASC',
-  })
+  const collections = createCollections(database)
 
-  const notesCollection = createSqliteCollection<NoteRecord, number>({
-    id: 'sqlite-notes',
-    tableName: 'notes',
-    keyColumn: 'id',
-    getKey: (row) => row.id,
-    database,
-    orderBy: 'id ASC',
-  })
-
-  const createBatchTransaction = (
-    config?: Omit<TransactionConfig<NotebookRecord | NoteRecord>, 'mutationFn'>,
-  ) =>
-    createTransaction<NotebookRecord | NoteRecord>({
-      ...config,
-      mutationFn: async ({ transaction }) => {
-        await notebooksCollection.utils.persistMutations(transaction)
-        await notesCollection.utils.persistMutations(transaction)
-      },
-    })
+  const makeBatchTx = (
+    config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
+  ) => createBatchTransaction(collections, config)
 
   return {
     database,
-    notebooksCollection,
-    notesCollection,
+    notebooksCollection: collections.notebooks,
+    notesCollection: collections.notes,
     inspectTables: database.inspectTables.bind(database),
-    createBatchTransaction,
+    createBatchTransaction: makeBatchTx,
     createInsertDraft(tableName) {
       const row = database.createInsertableRow(tableName)
 
@@ -98,10 +96,10 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
             columnName,
             database.coerceTableValue(tableName, columnName, value),
           ]),
-        ) as unknown as NotebookRecord
+        ) as unknown as NotebookRow
 
         transaction.mutate(() => {
-          notebooksCollection.insert(row)
+          collections.notebooks.insert(row)
         })
 
         return
@@ -112,25 +110,25 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
           columnName,
           database.coerceTableValue(tableName, columnName, value),
         ]),
-      ) as unknown as NoteRecord
+      ) as unknown as NoteRow
 
       transaction.mutate(() => {
-        notesCollection.insert(row)
+        collections.notes.insert(row)
       })
     },
     async updateCell(tableName, key, columnName, value) {
       const typedValue = database.coerceTableValue(tableName, columnName, value)
-      const transaction = createBatchTransaction()
+      const transaction = makeBatchTx()
 
       if (tableName === 'notebooks') {
         transaction.mutate(() => {
-          notebooksCollection.update(key, (draft) => {
+          collections.notebooks.update(key, (draft) => {
             ;(draft as Record<string, unknown>)[columnName] = typedValue
           })
         })
       } else {
         transaction.mutate(() => {
-          notesCollection.update(key, (draft) => {
+          collections.notes.update(key, (draft) => {
             ;(draft as Record<string, unknown>)[columnName] = typedValue
           })
         })
@@ -139,19 +137,19 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       await transaction.isPersisted.promise
     },
     async insertRow(tableName) {
-      const transaction = createBatchTransaction()
+      const transaction = makeBatchTx()
 
       if (tableName === 'notebooks') {
-        const newRow = database.createInsertableRow(tableName) as unknown as NotebookRecord
+        const newRow = database.createInsertableRow(tableName) as unknown as NotebookRow
 
         transaction.mutate(() => {
-          notebooksCollection.insert(newRow)
+          collections.notebooks.insert(newRow)
         })
       } else {
-        const newRow = database.createInsertableRow(tableName) as unknown as NoteRecord
+        const newRow = database.createInsertableRow(tableName) as unknown as NoteRow
 
         transaction.mutate(() => {
-          notesCollection.insert(newRow)
+          collections.notes.insert(newRow)
         })
       }
 
