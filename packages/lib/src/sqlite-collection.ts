@@ -34,6 +34,7 @@ export interface SqliteIndexDefinition<
   TFields extends readonly string[] = readonly string[],
 > {
   fields: TFields
+  unique: boolean
 }
 
 export type SqliteIndexMap = Record<string, SqliteIndexDefinition<readonly string[]>>

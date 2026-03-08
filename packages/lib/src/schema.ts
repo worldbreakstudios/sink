@@ -21,6 +21,7 @@ export interface TableIndexOptions<
 > {
   fields: TFields
   staged?: boolean
+  unique?: boolean
 }
 
 export interface TableIndexDefinition<
@@ -29,6 +30,7 @@ export interface TableIndexDefinition<
   name: string
   fields: TFields
   staged: boolean
+  unique: boolean
 }
 
 export const RESERVED_SYSTEM_FIELD_NAMES = [
@@ -173,6 +175,14 @@ export interface TableDefinition<
     name: string,
     options: TableIndexOptions,
   ): TableDefinition<TColumns>
+  uniqueIndex(
+    name: string,
+    fields: readonly string[],
+  ): TableDefinition<TColumns>
+  uniqueIndex(
+    name: string,
+    options: TableIndexOptions,
+  ): TableDefinition<TColumns>
   withCreatedAt(enabled?: boolean): TableDefinition<TColumns>
   withUpdatedAt(enabled?: boolean): TableDefinition<TColumns>
   withArchivedAt(enabled?: boolean): TableDefinition<TColumns>
@@ -205,6 +215,7 @@ export function getEffectiveTableFieldNames(def: TableDefinition): readonly stri
 function normalizeIndexDefinition(
   name: string,
   fieldsOrOptions: readonly string[] | TableIndexOptions,
+  unique = false,
 ): TableIndexDefinition {
   if (RESERVED_INDEX_NAMES.includes(name as (typeof RESERVED_INDEX_NAMES)[number])) {
     throw new Error(`Index "${name}" is reserved.`)
@@ -215,6 +226,7 @@ function normalizeIndexDefinition(
       name,
       fields: [...fieldsOrOptions],
       staged: false,
+      unique,
     }
   }
 
@@ -224,6 +236,7 @@ function normalizeIndexDefinition(
     name,
     fields: [...options.fields],
     staged: options.staged ?? false,
+    unique: options.unique ?? unique,
   }
 }
 
@@ -252,6 +265,14 @@ function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<
         columns,
         options,
         [...indexes, normalizeIndexDefinition(name, fieldsOrOptions)],
+      )
+    },
+    uniqueIndex(name, fieldsOrOptions) {
+      return createTableDefinition(
+        tableName,
+        columns,
+        options,
+        [...indexes, normalizeIndexDefinition(name, fieldsOrOptions, true)],
       )
     },
     withCreatedAt(enabled = true) {

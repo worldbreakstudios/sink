@@ -149,7 +149,7 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push(`  ${def.tableName}: {`)
     for (const index of getGeneratedIndexes(def)) {
       lines.push(
-        `    ${index.name}: { fields: ${renderStringTuple(index.fields)} },`,
+        `    ${index.name}: { fields: ${renderStringTuple(index.fields)}, unique: ${index.unique} },`,
       )
     }
     lines.push('  },')
@@ -441,12 +441,19 @@ function renderUpdateAssignment(def: TableDefinition, sourceName: string): strin
 function getGeneratedIndexes(def: TableDefinition): Array<{
   name: string
   fields: readonly string[]
+  unique: boolean
   createSql: string | null
 }> {
-  const indexes: Array<{ name: string; fields: readonly string[]; createSql: string | null }> = [
+  const indexes: Array<{
+    name: string
+    fields: readonly string[]
+    unique: boolean
+    createSql: string | null
+  }> = [
     {
       name: 'by_id',
       fields: ['_id'],
+      unique: true,
       createSql: null,
     },
   ]
@@ -455,7 +462,13 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
     indexes.push({
       name: 'by_creation_time',
       fields: ['_createdAt', '_id'],
-      createSql: createIndexSql(def.tableName, 'by_creation_time', ['_createdAt', '_id']),
+      unique: false,
+      createSql: createIndexSql(
+        def.tableName,
+        'by_creation_time',
+        ['_createdAt', '_id'],
+        false,
+      ),
     })
   }
 
@@ -464,7 +477,13 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
     indexes.push({
       name: index.name,
       fields: [...index.fields, tieBreaker],
-      createSql: createIndexSql(def.tableName, index.name, [...index.fields, tieBreaker]),
+      unique: index.unique,
+      createSql: createIndexSql(
+        def.tableName,
+        index.name,
+        [...index.fields, tieBreaker],
+        index.unique,
+      ),
     })
   }
 
@@ -475,9 +494,10 @@ function createIndexSql(
   tableName: string,
   indexName: string,
   fields: readonly string[],
+  unique: boolean,
 ): string {
   const expressions = fields.map(fieldPathToSqlExpression)
-  return `CREATE INDEX IF NOT EXISTS "${escapeSqlIdentifier(`idx_${tableName}_${indexName}`)}" ON "${escapeSqlIdentifier(tableName)}" (${expressions.join(', ')});`
+  return `CREATE ${unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS "${escapeSqlIdentifier(`idx_${tableName}_${indexName}`)}" ON "${escapeSqlIdentifier(tableName)}" (${expressions.join(', ')});`
 }
 
 function fieldPathToSqlExpression(fieldPath: string): string {
