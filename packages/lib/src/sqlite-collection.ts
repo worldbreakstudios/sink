@@ -13,6 +13,7 @@ import { FrontendSqliteDatabase } from './sqlite'
 export interface CreateSqliteCollectionOptions<
   TRow extends object,
   TKey extends string | number,
+  TIndexes extends SqliteIndexMap = Record<string, never>,
 > {
   id: string
   tableName: string
@@ -21,12 +22,21 @@ export interface CreateSqliteCollectionOptions<
   database: FrontendSqliteDatabase
   orderBy?: string
   referenceColumns?: Partial<Record<keyof TRow & string, SqliteReferenceColumn>>
+  indexes?: TIndexes
 }
 
 export interface SqliteReferenceColumn {
   referencedTable: string
   enforceExists: boolean
 }
+
+export interface SqliteIndexDefinition<
+  TFields extends readonly string[] = readonly string[],
+> {
+  fields: TFields
+}
+
+export type SqliteIndexMap = Record<string, SqliteIndexDefinition<readonly string[]>>
 
 export interface SqliteCollectionUtils<TRow extends object>
   extends LocalOnlyCollectionUtils {
@@ -40,21 +50,115 @@ export interface SqliteCollectionUtils<TRow extends object>
 export type SqliteCollection<
   TRow extends object,
   TKey extends string | number,
-> = Collection<TRow, TKey, SqliteCollectionUtils<TRow>>
+  TIndexes extends SqliteIndexMap = Record<string, never>,
+> = Collection<TRow, TKey, SqliteCollectionUtils<TRow>> & {
+  query(): SqliteQueryInitializer<TRow, TIndexes>
+}
+
+type Head<TFields extends readonly string[]> = TFields extends readonly [
+  infer THead extends string,
+  ...readonly string[],
+]
+  ? THead
+  : never
+
+type Tail<TFields extends readonly string[]> = TFields extends readonly [
+  string,
+  ...infer TRest extends readonly string[],
+]
+  ? TRest
+  : []
+
+type IndexFieldValue<TRow, TField extends string> = TField extends keyof TRow
+  ? TRow[TField]
+  : unknown
+
+export interface SqliteIndexRangeBuilder<
+  TRow extends object,
+  TFields extends readonly string[],
+> {
+  eq<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>
+  gt<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, false, true>
+  gte<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, false, true>
+  lt<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, true, false>
+  lte<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, true, false>
+}
+
+export interface SqliteBoundIndexRangeBuilder<
+  TRow extends object,
+  TField extends string,
+  THasLower extends boolean,
+  THasUpper extends boolean,
+> {
+  gt<TNextField extends THasLower extends true ? never : TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, true, THasUpper>
+  gte<TNextField extends THasLower extends true ? never : TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, true, THasUpper>
+  lt<TNextField extends THasUpper extends true ? never : TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>
+  lte<TNextField extends THasUpper extends true ? never : TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>
+}
+
+export interface SqliteQueryInitializer<
+  TRow extends object,
+  TIndexes extends SqliteIndexMap,
+> {
+  withIndex<TIndexName extends keyof TIndexes & string>(
+    indexName: TIndexName,
+    build?:
+      | ((
+          builder: SqliteIndexRangeBuilder<TRow, TIndexes[TIndexName]['fields']>,
+        ) => unknown)
+      | undefined,
+  ): SqliteIndexedQuery<TRow>
+}
+
+export interface SqliteIndexedQuery<TRow extends object> {
+  order(direction: 'asc' | 'desc'): SqliteIndexedQuery<TRow>
+  collect(): TRow[]
+  first(): TRow | null
+  unique(): TRow | null
+  take(limit: number): TRow[]
+}
 
 export function createSqliteCollection<
   TRow extends object,
   TKey extends string | number,
+  TIndexes extends SqliteIndexMap = Record<string, never>,
 >(
-  options: CreateSqliteCollectionOptions<TRow, TKey>,
-): SqliteCollection<TRow, TKey> {
+  options: CreateSqliteCollectionOptions<TRow, TKey, TIndexes>,
+): SqliteCollection<TRow, TKey, TIndexes> {
   const baseOptions = localOnlyCollectionOptions<TRow, TKey>({
     id: options.id,
     getKey: options.getKey,
     initialData: readAllRows(options.database, options.tableName, options.orderBy),
   })
 
-  let collection!: SqliteCollection<TRow, TKey>
+  let collection!: SqliteCollection<TRow, TKey, TIndexes>
 
   const readAll = () =>
     readAllRows<TRow>(options.database, options.tableName, options.orderBy)
@@ -71,7 +175,14 @@ export function createSqliteCollection<
       return
     }
 
-    persistSqliteMutations(options, relevantMutations)
+    persistSqliteMutations(
+      options as unknown as CreateSqliteCollectionOptions<
+        TRow,
+        string | number,
+        SqliteIndexMap
+      >,
+      relevantMutations,
+    )
     baseOptions.utils.acceptMutations({
       mutations: relevantMutations as Array<PendingMutation<Record<string, unknown>>>,
     })
@@ -97,7 +208,14 @@ export function createSqliteCollection<
       persistMutations,
       createSqliteTransaction,
     },
-  }) as unknown as SqliteCollection<TRow, TKey>
+  }) as unknown as SqliteCollection<TRow, TKey, TIndexes>
+
+  collection.query = () =>
+    createSqliteQueryInitializer<TRow, TIndexes>(
+      options.database,
+      options.tableName,
+      options.indexes ?? ({} as TIndexes),
+    )
 
   return collection
 }
@@ -114,8 +232,90 @@ function readAllRows<TRow extends object>(
   return database.query<TRow>(sql)
 }
 
+function createSqliteQueryInitializer<
+  TRow extends object,
+  TIndexes extends SqliteIndexMap,
+>(
+  database: FrontendSqliteDatabase,
+  tableName: string,
+  indexes: TIndexes,
+): SqliteQueryInitializer<TRow, TIndexes> {
+  return {
+    withIndex(indexName, build) {
+      const runtimeIndex = indexes[indexName]
+
+      if (!runtimeIndex) {
+        throw new Error(`Index "${String(indexName)}" not found on table "${tableName}".`)
+      }
+
+      const rangeBuilder = new RuntimeIndexRangeBuilder<TRow>()
+
+      if (build) {
+        build(
+          rangeBuilder as unknown as SqliteIndexRangeBuilder<
+            TRow,
+            TIndexes[typeof indexName]['fields']
+          >,
+        )
+      }
+
+      return createIndexedQuery<TRow>(
+        database,
+        tableName,
+        runtimeIndex.fields,
+        rangeBuilder.getState(),
+      )
+    },
+  }
+}
+
+function createIndexedQuery<TRow extends object>(
+  database: FrontendSqliteDatabase,
+  tableName: string,
+  indexFields: readonly string[],
+  range: SqliteQueryRangeState,
+): SqliteIndexedQuery<TRow> {
+  let direction: 'asc' | 'desc' = 'asc'
+
+  const run = (limit?: number): TRow[] => {
+    const { sql, bind } = buildIndexedSelectSql(
+      tableName,
+      indexFields,
+      range,
+      direction,
+      limit,
+    )
+    return database.query<TRow>(sql, bind as any)
+  }
+
+  return {
+    order(nextDirection) {
+      direction = nextDirection
+      return this
+    },
+    collect() {
+      return run()
+    },
+    first() {
+      return run(1)[0] ?? null
+    },
+    unique() {
+      const rows = run(2)
+
+      if (rows.length > 1) {
+        throw new Error('Expected a unique result, but found multiple rows.')
+      }
+
+      return rows[0] ?? null
+    },
+    take(limit) {
+      return run(limit)
+    },
+  }
+}
+
 function persistSqliteMutations<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutations: Array<PendingMutation<TRow>>,
 ): void {
   options.database.execute('BEGIN')
@@ -138,7 +338,7 @@ function persistSqliteMutations<TRow extends object>(
 }
 
 function applyMutation<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
 ): void {
   switch (mutation.type) {
@@ -155,7 +355,7 @@ function applyMutation<TRow extends object>(
 }
 
 function insertRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   row: TRow,
 ): void {
   const completeRow = withInsertSystemFields(options, row)
@@ -180,7 +380,7 @@ function insertRow<TRow extends object>(
 }
 
 function updateRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
 ): void {
   const changes = withUpdateSystemFields(options, mutation.changes)
@@ -205,7 +405,7 @@ function updateRow<TRow extends object>(
 }
 
 function deleteRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   key: string | number,
 ): void {
   options.database.execute(
@@ -219,7 +419,7 @@ function escapeIdentifier(identifier: string): string {
 }
 
 function withInsertSystemFields<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   row: TRow,
 ): Record<string, unknown> {
   const nextRow = { ...(row as Record<string, unknown>) }
@@ -243,7 +443,7 @@ function withInsertSystemFields<TRow extends object>(
 }
 
 function withUpdateSystemFields<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   changes: Partial<TRow>,
 ): Record<string, unknown> {
   const nextChanges = { ...(changes as Record<string, unknown>) }
@@ -259,7 +459,7 @@ function withUpdateSystemFields<TRow extends object>(
 }
 
 function validateReferenceColumns<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   rowOrChanges: Record<string, unknown>,
 ): void {
   const referenceColumns = options.referenceColumns as
@@ -287,4 +487,152 @@ function validateReferenceColumns<TRow extends object>(
 
 function currentTimestamp(): bigint {
   return BigInt(Date.now())
+}
+
+type SqliteComparisonOperator = '=' | '>' | '>=' | '<' | '<='
+
+interface SqliteQueryRangeState {
+  equals: Array<{ field: string; value: unknown }>
+  lowerBound: { field: string; value: unknown; operator: '>' | '>=' } | null
+  upperBound: { field: string; value: unknown; operator: '<' | '<=' } | null
+}
+
+class RuntimeIndexRangeBuilder<TRow extends object>
+  implements SqliteIndexRangeBuilder<TRow, readonly string[]>,
+    SqliteBoundIndexRangeBuilder<TRow, string, boolean, boolean>
+{
+  private state: SqliteQueryRangeState = {
+    equals: [],
+    lowerBound: null,
+    upperBound: null,
+  }
+
+  eq(field: string, value: unknown) {
+    this.state.equals.push({ field, value })
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>
+  }
+
+  gt(field: string, value: unknown) {
+    this.setBound(field, value, '>')
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>
+  }
+
+  gte(field: string, value: unknown) {
+    this.setBound(field, value, '>=')
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>
+  }
+
+  lt(field: string, value: unknown) {
+    this.setBound(field, value, '<')
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>
+  }
+
+  lte(field: string, value: unknown) {
+    this.setBound(field, value, '<=')
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>
+  }
+
+  getState(): SqliteQueryRangeState {
+    return {
+      equals: [...this.state.equals],
+      lowerBound: this.state.lowerBound,
+      upperBound: this.state.upperBound,
+    }
+  }
+
+  private setBound(
+    field: string,
+    value: unknown,
+    operator: Exclude<SqliteComparisonOperator, '='>,
+  ): void {
+    const target =
+      operator === '>' || operator === '>=' ? 'lowerBound' : 'upperBound'
+    const existing = this.state[target]
+
+    if (existing !== null && existing.field !== field) {
+      throw new Error(`Index range bound must stay on field "${existing.field}".`)
+    }
+
+    if (target === 'lowerBound') {
+      this.state.lowerBound = { field, value, operator: operator as '>' | '>=' }
+      return
+    }
+
+    this.state.upperBound = { field, value, operator: operator as '<' | '<=' }
+  }
+}
+
+function buildIndexedSelectSql(
+  tableName: string,
+  indexFields: readonly string[],
+  range: SqliteQueryRangeState,
+  direction: 'asc' | 'desc',
+  limit?: number,
+): { sql: string; bind: unknown[] } {
+  const whereClauses: string[] = []
+  const bind: unknown[] = []
+
+  for (const equality of range.equals) {
+    appendWhereClause(whereClauses, bind, equality.field, '=', equality.value)
+  }
+
+  if (range.lowerBound) {
+    appendWhereClause(
+      whereClauses,
+      bind,
+      range.lowerBound.field,
+      range.lowerBound.operator,
+      range.lowerBound.value,
+    )
+  }
+
+  if (range.upperBound) {
+    appendWhereClause(
+      whereClauses,
+      bind,
+      range.upperBound.field,
+      range.upperBound.operator,
+      range.upperBound.value,
+    )
+  }
+
+  const whereSql =
+    whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : ''
+  const orderSql = ` ORDER BY ${indexFields
+    .map((field) => `${fieldPathToSqlExpression(field)} ${direction.toUpperCase()}`)
+    .join(', ')}`
+  const limitSql = limit !== undefined ? ' LIMIT ?' : ''
+
+  if (limit !== undefined) {
+    bind.push(limit)
+  }
+
+  return {
+    sql: `SELECT * FROM "${escapeIdentifier(tableName)}"${whereSql}${orderSql}${limitSql};`,
+    bind,
+  }
+}
+
+function appendWhereClause(
+  whereClauses: string[],
+  bind: unknown[],
+  field: string,
+  operator: SqliteComparisonOperator,
+  value: unknown,
+): void {
+  whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator} ?`)
+  bind.push(value)
+}
+
+function fieldPathToSqlExpression(fieldPath: string): string {
+  if (!fieldPath.includes('.')) {
+    return `"${escapeIdentifier(fieldPath)}"`
+  }
+
+  const [root, ...segments] = fieldPath.split('.')
+  const jsonPath = `$.${segments.join('.')}`
+  if (!root) {
+    throw new Error(`Invalid field path "${fieldPath}".`)
+  }
+  return `json_extract("${escapeIdentifier(root)}", '${jsonPath.replace(/'/g, "''")}')`
 }

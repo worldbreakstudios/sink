@@ -16,6 +16,31 @@ export interface IdColumnOptions {
   enforceExists?: boolean
 }
 
+export interface TableIndexOptions<
+  TFields extends readonly string[] = readonly string[],
+> {
+  fields: TFields
+  staged?: boolean
+}
+
+export interface TableIndexDefinition<
+  TFields extends readonly string[] = readonly string[],
+> {
+  name: string
+  fields: TFields
+  staged: boolean
+}
+
+export const RESERVED_SYSTEM_FIELD_NAMES = [
+  'id',
+  '_id',
+  '_createdAt',
+  '_updatedAt',
+  '_archivedAt',
+] as const
+
+export const RESERVED_INDEX_NAMES = ['by_id', 'by_creation_time'] as const
+
 type RegisteredSchemaTableName = keyof RegisteredSchemaTables extends never
   ? string
   : Extract<keyof RegisteredSchemaTables, string>
@@ -139,22 +164,77 @@ export interface TableDefinition<
   tableName: string
   columns: TColumns
   options: TableDefinitionOptions
+  indexes: readonly TableIndexDefinition[]
+  index(
+    name: string,
+    fields: readonly string[],
+  ): TableDefinition<TColumns>
+  index(
+    name: string,
+    options: TableIndexOptions,
+  ): TableDefinition<TColumns>
   withCreatedAt(enabled?: boolean): TableDefinition<TColumns>
   withUpdatedAt(enabled?: boolean): TableDefinition<TColumns>
   withArchivedAt(enabled?: boolean): TableDefinition<TColumns>
+}
+
+export function getImplicitSystemFields(
+  options: TableDefinitionOptions,
+): readonly string[] {
+  const fields = ['_id']
+
+  if (options.withCreatedAt) {
+    fields.push('_createdAt')
+  }
+
+  if (options.withUpdatedAt) {
+    fields.push('_updatedAt')
+  }
+
+  if (options.withArchivedAt) {
+    fields.push('_archivedAt')
+  }
+
+  return fields
+}
+
+export function getEffectiveTableFieldNames(def: TableDefinition): readonly string[] {
+  return [...getImplicitSystemFields(def.options), ...Object.keys(def.columns)]
+}
+
+function normalizeIndexDefinition(
+  name: string,
+  fieldsOrOptions: readonly string[] | TableIndexOptions,
+): TableIndexDefinition {
+  if (RESERVED_INDEX_NAMES.includes(name as (typeof RESERVED_INDEX_NAMES)[number])) {
+    throw new Error(`Index "${name}" is reserved.`)
+  }
+
+  if (Array.isArray(fieldsOrOptions)) {
+    return {
+      name,
+      fields: [...fieldsOrOptions],
+      staged: false,
+    }
+  }
+
+  const options = fieldsOrOptions as TableIndexOptions
+
+  return {
+    name,
+    fields: [...options.fields],
+    staged: options.staged ?? false,
+  }
 }
 
 function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<any>>>(
   tableName: string,
   columns: TColumns,
   options: TableDefinitionOptions = {},
+  indexes: readonly TableIndexDefinition[] = [],
 ): TableDefinition<TColumns> {
   if (
-    'id' in columns ||
-    '_id' in columns ||
-    '_createdAt' in columns ||
-    '_updatedAt' in columns ||
-    '_archivedAt' in columns
+    RESERVED_SYSTEM_FIELD_NAMES.some((fieldName) => fieldName in columns)
   ) {
     throw new Error(
       `Table "${tableName}" cannot define reserved system fields.`,
@@ -165,23 +245,32 @@ function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<
     tableName,
     columns,
     options,
+    indexes,
+    index(name, fieldsOrOptions) {
+      return createTableDefinition(
+        tableName,
+        columns,
+        options,
+        [...indexes, normalizeIndexDefinition(name, fieldsOrOptions)],
+      )
+    },
     withCreatedAt(enabled = true) {
       return createTableDefinition(tableName, columns, {
         ...options,
         withCreatedAt: enabled,
-      })
+      }, indexes)
     },
     withUpdatedAt(enabled = true) {
       return createTableDefinition(tableName, columns, {
         ...options,
         withUpdatedAt: enabled,
-      })
+      }, indexes)
     },
     withArchivedAt(enabled = true) {
       return createTableDefinition(tableName, columns, {
         ...options,
         withArchivedAt: enabled,
-      })
+      }, indexes)
     },
   }
 }

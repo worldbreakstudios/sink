@@ -6,4 +6,4 @@ export default defineTable(
     name: v.string(),
   },
   { orderBy: '_id ASC' },
-)
+).index('by_name', ['name'])

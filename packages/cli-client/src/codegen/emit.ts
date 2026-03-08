@@ -8,7 +8,7 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push("import type { TransactionConfig } from '@tanstack/db'")
   lines.push("import { createTransaction } from '@tanstack/db'")
   lines.push(
-    "import type { FrontendSqliteDatabase, SqliteCollection, SqliteReferenceColumn } from '@sink/lib'",
+    "import type { FrontendSqliteDatabase, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
   )
   lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
@@ -81,12 +81,25 @@ export function emit(definitions: TableDefinition[]): string {
     `export const SQL_CREATE_ALL = [${createConsts.join(', ')}] as const`,
   )
   lines.push('')
+  lines.push(
+    `export const SQL_CREATE_INDEXES = ${renderStringArray(
+      definitions.flatMap((def) =>
+        getGeneratedIndexes(def)
+          .filter((index) => index.createSql !== null)
+          .map((index) => index.createSql as string),
+      ),
+    )} as const`,
+  )
+  lines.push('')
 
   // createAllTables function
   lines.push(
     'export function createAllTables(db: FrontendSqliteDatabase): void {',
   )
   lines.push('  for (const sql of SQL_CREATE_ALL) {')
+  lines.push('    db.execute(sql)')
+  lines.push('  }')
+  lines.push('  for (const sql of SQL_CREATE_INDEXES) {')
   lines.push('    db.execute(sql)')
   lines.push('  }')
   lines.push('}')
@@ -123,12 +136,32 @@ export function emit(definitions: TableDefinition[]): string {
   }
   lines.push('}')
   lines.push('')
+  lines.push('export type IndexesByTable = {')
+  for (const def of definitions) {
+    lines.push(
+      `  ${def.tableName}: Record<string, SqliteIndexDefinition<readonly string[]>>`,
+    )
+  }
+  lines.push('}')
+  lines.push('')
+  lines.push('export const INDEXES = {')
+  for (const def of definitions) {
+    lines.push(`  ${def.tableName}: {`)
+    for (const index of getGeneratedIndexes(def)) {
+      lines.push(
+        `    ${index.name}: { fields: ${renderStringTuple(index.fields)} },`,
+      )
+    }
+    lines.push('  },')
+  }
+  lines.push('} as const satisfies IndexesByTable')
+  lines.push('')
 
   // SchemaCollections interface
   lines.push('export interface SchemaCollections {')
   for (const def of definitions) {
     lines.push(
-      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}>`,
+      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>`,
     )
   }
   lines.push('}')
@@ -142,13 +175,14 @@ export function emit(definitions: TableDefinition[]): string {
   for (const def of definitions) {
     const orderBy = def.options.orderBy
     lines.push(
-      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}>({`,
+      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
     )
     lines.push(`      id: 'sqlite-${def.tableName}',`)
     lines.push(`      tableName: '${def.tableName}',`)
     lines.push(`      keyColumn: '_id',`)
     lines.push(`      getKey: (row) => row._id,`)
     lines.push(`      database: db,`)
+    lines.push(`      indexes: INDEXES.${def.tableName},`)
     lines.push(`      referenceColumns: REFERENCE_COLUMNS.${def.tableName},`)
     if (orderBy) {
       lines.push(`      orderBy: '${orderBy}',`)
@@ -402,4 +436,71 @@ function renderUpdateAssignment(def: TableDefinition, sourceName: string): strin
   }
 
   return `{ ...${sourceName}, _updatedAt: ${sourceName}._updatedAt ?? currentTimestamp() }`
+}
+
+function getGeneratedIndexes(def: TableDefinition): Array<{
+  name: string
+  fields: readonly string[]
+  createSql: string | null
+}> {
+  const indexes: Array<{ name: string; fields: readonly string[]; createSql: string | null }> = [
+    {
+      name: 'by_id',
+      fields: ['_id'],
+      createSql: null,
+    },
+  ]
+
+  if (def.options.withCreatedAt) {
+    indexes.push({
+      name: 'by_creation_time',
+      fields: ['_createdAt', '_id'],
+      createSql: createIndexSql(def.tableName, 'by_creation_time', ['_createdAt', '_id']),
+    })
+  }
+
+  for (const index of def.indexes) {
+    const tieBreaker = def.options.withCreatedAt ? '_createdAt' : '_id'
+    indexes.push({
+      name: index.name,
+      fields: [...index.fields, tieBreaker],
+      createSql: createIndexSql(def.tableName, index.name, [...index.fields, tieBreaker]),
+    })
+  }
+
+  return indexes
+}
+
+function createIndexSql(
+  tableName: string,
+  indexName: string,
+  fields: readonly string[],
+): string {
+  const expressions = fields.map(fieldPathToSqlExpression)
+  return `CREATE INDEX IF NOT EXISTS "${escapeSqlIdentifier(`idx_${tableName}_${indexName}`)}" ON "${escapeSqlIdentifier(tableName)}" (${expressions.join(', ')});`
+}
+
+function fieldPathToSqlExpression(fieldPath: string): string {
+  if (!fieldPath.includes('.')) {
+    return `"${escapeSqlIdentifier(fieldPath)}"`
+  }
+
+  const [root, ...segments] = fieldPath.split('.')
+  const jsonPath = `$.${segments.join('.')}`
+  if (!root) {
+    throw new Error(`Invalid field path "${fieldPath}".`)
+  }
+  return `json_extract("${escapeSqlIdentifier(root)}", '${jsonPath.replace(/'/g, "''")}')`
+}
+
+function escapeSqlIdentifier(identifier: string): string {
+  return identifier.replace(/"/g, '""')
+}
+
+function renderStringTuple(fields: readonly string[]): string {
+  return `[${fields.map((field) => `'${field}'`).join(', ')}] as const`
+}
+
+function renderStringArray(values: readonly string[]): string {
+  return `[${values.map((value) => `\`${value.replace(/`/g, '\\`')}\``).join(', ')}]`
 }

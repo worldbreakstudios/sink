@@ -1,5 +1,10 @@
 import fs from 'node:fs'
-import type { TableDefinition } from '@sink/lib'
+import {
+  RESERVED_INDEX_NAMES,
+  RESERVED_SYSTEM_FIELD_NAMES,
+  getEffectiveTableFieldNames,
+  type TableDefinition,
+} from '@sink/lib'
 
 export async function loadSchemaFiles(
   files: string[],
@@ -32,9 +37,76 @@ export async function loadSchemaFiles(
       )
     }
 
+    validateIndexes(def)
+
     seenNames.add(def.tableName)
     definitions.push(def)
   }
 
   return definitions
+}
+
+function validateIndexes(def: TableDefinition): void {
+  const seenIndexNames = new Set<string>()
+  const effectiveFields = new Set(getEffectiveTableFieldNames(def))
+
+  for (const index of def.indexes) {
+    if (seenIndexNames.has(index.name)) {
+      throw new Error(
+        `Table "${def.tableName}" has a duplicate index name "${index.name}".`,
+      )
+    }
+
+    if (RESERVED_INDEX_NAMES.includes(index.name as (typeof RESERVED_INDEX_NAMES)[number])) {
+      throw new Error(`Table "${def.tableName}" cannot define reserved index "${index.name}".`)
+    }
+
+    if (index.staged) {
+      throw new Error(
+        `Table "${def.tableName}" index "${index.name}" is staged, but staged indexes are not supported yet.`,
+      )
+    }
+
+    if (index.fields.length === 0) {
+      throw new Error(`Table "${def.tableName}" index "${index.name}" must include at least one field.`)
+    }
+
+    const seenFields = new Set<string>()
+
+    for (const field of index.fields) {
+      if (seenFields.has(field)) {
+        throw new Error(
+          `Table "${def.tableName}" index "${index.name}" has duplicate field "${field}".`,
+        )
+      }
+
+      if (field.startsWith('_')) {
+        throw new Error(
+          `Table "${def.tableName}" index "${index.name}" cannot index reserved field "${field}".`,
+        )
+      }
+
+      const [topLevelField] = field.split('.')
+
+      if (!topLevelField || !effectiveFields.has(topLevelField)) {
+        throw new Error(
+          `Table "${def.tableName}" index "${index.name}" references unknown field "${field}".`,
+        )
+      }
+
+      if (
+        RESERVED_SYSTEM_FIELD_NAMES.includes(
+          topLevelField as (typeof RESERVED_SYSTEM_FIELD_NAMES)[number],
+        )
+      ) {
+        throw new Error(
+          `Table "${def.tableName}" index "${index.name}" cannot index reserved field "${field}".`,
+        )
+      }
+
+      seenFields.add(field)
+    }
+
+    seenIndexNames.add(index.name)
+  }
 }

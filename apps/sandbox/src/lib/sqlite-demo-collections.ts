@@ -67,7 +67,89 @@ function getCollection(
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const db = await FrontendSqliteDatabase.createInMemory()
+  const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
+  const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
+  const noteObjectTypeId = '24a7c31ef20d4b68a15f77c2de983ab4'
+  const taskObjectTypeId = '38e5d72ab904f36be21d44a89f0c6d3f'
+  const inboxObjectId = '4ea96bf14cd82750a8d2e6719f43bc05'
+  const taskObjectId = '57c9e20f34b8716ad2495ce30f8ab164'
+  const titleFieldId = '68f1be24ad70953c41e28fd6bc3a0175'
+  const bodyFieldId = '73a2d5f91c8e4067bb14de2559fa6c82'
+  const statusFieldId = '8ce34a71d29540f6ab167e4c3d8bf025'
+  const inboxObjectCreatedAt = 1709748000000n
+  const taskObjectCreatedAt = 1709748600000n
+  const titleFieldCreatedAt = 1709748120000n
+  const bodyFieldCreatedAt = 1709748180000n
+  const statusFieldCreatedAt = 1709748720000n
   createAllTables(db)
+
+  db.execute(
+    `
+      INSERT INTO fieldTypes (_id, name)
+      VALUES
+        (?, ?),
+        (?, ?);
+    `,
+    [textFieldTypeId, 'text', statusFieldTypeId, 'status'],
+  )
+
+  db.execute(
+    `
+      INSERT INTO objectTypes (_id, name)
+      VALUES
+        (?, ?),
+        (?, ?);
+    `,
+    [noteObjectTypeId, 'note', taskObjectTypeId, 'task'],
+  )
+
+  db.execute(
+    `
+      INSERT INTO objects (_id, _createdAt, type_id)
+      VALUES
+        (?, ?, ?),
+        (?, ?, ?);
+    `,
+    [
+      inboxObjectId,
+      inboxObjectCreatedAt,
+      noteObjectTypeId,
+      taskObjectId,
+      taskObjectCreatedAt,
+      taskObjectTypeId,
+    ],
+  )
+
+  db.execute(
+    `
+      INSERT INTO fields (_id, _createdAt, object_id, field_type_id, name, body)
+      VALUES
+        (?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?);
+    `,
+    [
+      titleFieldId,
+      titleFieldCreatedAt,
+      inboxObjectId,
+      textFieldTypeId,
+      'title',
+      'Welcome note title',
+      bodyFieldId,
+      bodyFieldCreatedAt,
+      inboxObjectId,
+      textFieldTypeId,
+      'body',
+      'Initial sandbox note body',
+      statusFieldId,
+      statusFieldCreatedAt,
+      taskObjectId,
+      statusFieldTypeId,
+      'status',
+      'open',
+    ],
+  )
+
   return db
 }
 

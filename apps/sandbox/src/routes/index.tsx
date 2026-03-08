@@ -215,6 +215,70 @@ function App() {
       ) as Record<string, number>,
     [tables],
   )
+  const indexedQueryPreview = useMemo(() => {
+    if (workspace === null || selectedTable === undefined) {
+      return null
+    }
+
+    switch (selectedTable.name as SqliteDemoTableName) {
+      case 'fields': {
+        const firstField = workspace.collections.fields.utils.readAll()[0]
+
+        if (!firstField) {
+          return null
+        }
+
+        const rows = workspace.collections.fields
+          .query()
+          .withIndex('by_object_id', (q) => q.eq('object_id', firstField.object_id))
+          .take(5)
+
+        return {
+          title: 'by_object_id',
+          query: `fields.query().withIndex('by_object_id', (q) => q.eq('object_id', '${firstField.object_id}')).take(5)`,
+          rows,
+        }
+      }
+      case 'fieldTypes': {
+        const rows = workspace.collections.fieldTypes.query().withIndex('by_name').take(5)
+
+        return {
+          title: 'by_name',
+          query: `fieldTypes.query().withIndex('by_name').take(5)`,
+          rows,
+        }
+      }
+      case 'objects': {
+        const firstObject = workspace.collections.objects.utils.readAll()[0]
+
+        if (!firstObject) {
+          return null
+        }
+
+        const rows = workspace.collections.objects
+          .query()
+          .withIndex('by_type_id', (q) => q.eq('type_id', firstObject.type_id))
+          .take(5)
+
+        return {
+          title: 'by_type_id',
+          query: `objects.query().withIndex('by_type_id', (q) => q.eq('type_id', '${firstObject.type_id}')).take(5)`,
+          rows,
+        }
+      }
+      case 'objectTypes': {
+        const rows = workspace.collections.objectTypes.query().withIndex('by_name').take(5)
+
+        return {
+          title: 'by_name',
+          query: `objectTypes.query().withIndex('by_name').take(5)`,
+          rows,
+        }
+      }
+      default:
+        return null
+    }
+  }, [selectedTable, workspace, selectedRows])
 
   const commitCellEdit = useCallback(
     async (rowId: SqliteDemoId, columnName: string, value: string) => {
@@ -338,6 +402,31 @@ function App() {
               </CardContent>
             </div>
           </Card>
+
+          {indexedQueryPreview ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Indexed Query Preview
+                </CardTitle>
+                <CardDescription>
+                  Using `{indexedQueryPreview.title}` on `{selectedTable.name}`.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <pre className="overflow-x-auto rounded-md border bg-muted p-3 text-xs text-muted-foreground">
+                  {indexedQueryPreview.query}
+                </pre>
+                <div className="space-y-1 text-sm">
+                  {indexedQueryPreview.rows.map((row) => (
+                    <div key={row._id} className="rounded-md border px-3 py-2">
+                      {formatReferenceOptionLabel(row)}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0">

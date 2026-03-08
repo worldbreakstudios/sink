@@ -28,6 +28,14 @@ export interface SqliteTableSnapshot {
   rows: SqliteTableRow[]
 }
 
+export interface SqliteIndexSnapshot {
+  name: string
+  tableName: string
+  unique: number
+  origin: string
+  partial: number
+}
+
 export interface SqliteExplorerSnapshot {
   version: string
   tables: SqliteTableSnapshot[]
@@ -124,6 +132,18 @@ export class FrontendSqliteDatabase {
     return this.query<SqliteTableColumn>(
       `PRAGMA table_info("${escapeIdentifier(tableName)}");`,
     )
+  }
+
+  getTableIndexes(tableName: string): SqliteIndexSnapshot[] {
+    return this.query<{
+      name: string
+      unique: number
+      origin: string
+      partial: number
+    }>(`PRAGMA index_list("${escapeIdentifier(tableName)}");`).map((index) => ({
+      ...index,
+      tableName,
+    }))
   }
 
   rowExists(tableName: string, id: SqlValue, keyColumn = '_id'): boolean {

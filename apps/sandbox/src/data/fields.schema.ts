@@ -9,4 +9,7 @@ export default defineTable(
     body: v.string(),
   },
   { orderBy: '_createdAt ASC' },
-).withCreatedAt(true)
+)
+  .withCreatedAt(true)
+  .index('by_object_id', ['object_id'])
+  .index('by_object_id_field_type', ['object_id', 'field_type_id'])
