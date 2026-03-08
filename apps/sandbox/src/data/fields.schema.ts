@@ -7,7 +7,6 @@ export default defineTable(
     field_type_id: v.id('fieldTypes'),
     name: v.string(),
     body: v.string(),
-    created_at: v.string(),
   },
   { orderBy: '_id ASC' },
-)
+).withCreatedAt(true)

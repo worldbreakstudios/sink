@@ -112,6 +112,9 @@ export const v = {
 
 export interface TableDefinitionOptions {
   orderBy?: string
+  withCreatedAt?: boolean
+  withUpdatedAt?: boolean
+  withArchivedAt?: boolean
 }
 
 export interface TableDefinition<
@@ -123,6 +126,51 @@ export interface TableDefinition<
   tableName: string
   columns: TColumns
   options: TableDefinitionOptions
+  withCreatedAt(enabled?: boolean): TableDefinition<TColumns>
+  withUpdatedAt(enabled?: boolean): TableDefinition<TColumns>
+  withArchivedAt(enabled?: boolean): TableDefinition<TColumns>
+}
+
+function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<any>>>(
+  tableName: string,
+  columns: TColumns,
+  options: TableDefinitionOptions = {},
+): TableDefinition<TColumns> {
+  if (
+    'id' in columns ||
+    '_id' in columns ||
+    '_createdAt' in columns ||
+    '_updatedAt' in columns ||
+    '_archivedAt' in columns
+  ) {
+    throw new Error(
+      `Table "${tableName}" cannot define reserved system fields.`,
+    )
+  }
+
+  return {
+    tableName,
+    columns,
+    options,
+    withCreatedAt(enabled = true) {
+      return createTableDefinition(tableName, columns, {
+        ...options,
+        withCreatedAt: enabled,
+      })
+    },
+    withUpdatedAt(enabled = true) {
+      return createTableDefinition(tableName, columns, {
+        ...options,
+        withUpdatedAt: enabled,
+      })
+    },
+    withArchivedAt(enabled = true) {
+      return createTableDefinition(tableName, columns, {
+        ...options,
+        withArchivedAt: enabled,
+      })
+    },
+  }
 }
 
 export function defineTable<TColumns extends Record<string, ColumnDescriptor<any>>>(
@@ -130,11 +178,5 @@ export function defineTable<TColumns extends Record<string, ColumnDescriptor<any
   columns: TColumns,
   options: TableDefinitionOptions = {},
 ): TableDefinition<TColumns> {
-  if ('id' in columns || '_id' in columns) {
-    throw new Error(
-      `Table "${tableName}" cannot define "id" or "_id"; "_id" is an implicit reserved system field.`,
-    )
-  }
-
-  return { tableName, columns, options }
+  return createTableDefinition(tableName, columns, options)
 }

@@ -34,6 +34,9 @@ export function emit(definitions: TableDefinition[]): string {
   for (const def of definitions) {
     lines.push(`export interface ${rowTypeName(def.tableName)} {`)
     lines.push(`  _id: ${systemIdTsType(def.tableName)}`)
+    for (const field of getImplicitSystemFields(def)) {
+      lines.push(`  ${field.name}: ${field.tsType}`)
+    }
     for (const [colName, col] of Object.entries(def.columns)) {
       lines.push(`  ${colName}: ${renderTsType(col)}`)
     }
@@ -51,6 +54,9 @@ export function emit(definitions: TableDefinition[]): string {
     const constName = `SQL_CREATE_${def.tableName.toUpperCase()}`
     lines.push(`export const ${constName} = \`CREATE TABLE IF NOT EXISTS "${def.tableName}" (`)
     const colDefs: string[] = ['  "_id" TEXT PRIMARY KEY']
+    for (const field of getImplicitSystemFields(def)) {
+      colDefs.push(`  "${field.name}" ${field.sqliteType}`)
+    }
     for (const [colName, col] of Object.entries(def.columns)) {
       let colDef = `  "${colName}" ${col.sqliteType}`
       if (col.defaultValue !== undefined) {
@@ -153,15 +159,20 @@ export function emit(definitions: TableDefinition[]): string {
     const singular = singularize(def.tableName)
     const plural = def.tableName
     const rowIdType = systemIdTsType(def.tableName)
+    const insertOmittedKeys = [
+      "'_id'",
+      ...getImplicitSystemFields(def).map((field) => `'${field.name}'`),
+    ].join(' | ')
+    const insertSystemFields = getInsertSystemFieldEntries(def)
 
     // insertX (single)
     lines.push(
-      `export function insert${pascal(singular)}(collections: SchemaCollections, row: Omit<${rowType}, '_id'>) {`,
+      `export function insert${pascal(singular)}(collections: SchemaCollections, row: Omit<${rowType}, ${insertOmittedKeys}>) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push(
-      `    const completeRow = { _id: createId<'${def.tableName}'>(), ...row } as ${rowType}`,
+      `    const completeRow = { ${insertSystemFields.join(', ')}, ...row } as ${rowType}`,
     )
     lines.push(
       `    collections.${def.tableName}.insert(completeRow)`,
@@ -199,13 +210,13 @@ export function emit(definitions: TableDefinition[]): string {
 
     // insertXs (batch)
     lines.push(
-      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Omit<${rowType}, '_id'>[]) {`,
+      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Omit<${rowType}, ${insertOmittedKeys}>[]) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push('    for (const row of rows) {')
     lines.push(
-      `      const completeRow = { _id: createId<'${def.tableName}'>(), ...row } as ${rowType}`,
+      `      const completeRow = { ${insertSystemFields.join(', ')}, ...row } as ${rowType}`,
     )
     lines.push(
       `      collections.${def.tableName}.insert(completeRow)`,
@@ -296,4 +307,56 @@ function renderTsType(col: ColumnDescriptor): string {
 
 function systemIdTsType(tableName: string): string {
   return `Id<'${tableName}'>`
+}
+
+function getImplicitSystemFields(def: TableDefinition): Array<{
+  name: string
+  tsType: string
+  sqliteType: string
+}> {
+  const fields: Array<{ name: string; tsType: string; sqliteType: string }> = []
+
+  if (def.options.withCreatedAt) {
+    fields.push({
+      name: '_createdAt',
+      tsType: 'string',
+      sqliteType: 'TEXT NOT NULL',
+    })
+  }
+
+  if (def.options.withUpdatedAt) {
+    fields.push({
+      name: '_updatedAt',
+      tsType: 'string',
+      sqliteType: 'TEXT NOT NULL',
+    })
+  }
+
+  if (def.options.withArchivedAt) {
+    fields.push({
+      name: '_archivedAt',
+      tsType: 'string | null',
+      sqliteType: 'TEXT',
+    })
+  }
+
+  return fields
+}
+
+function getInsertSystemFieldEntries(def: TableDefinition): string[] {
+  const fields = [`_id: createId<'${def.tableName}'>()`]
+
+  if (def.options.withCreatedAt) {
+    fields.push('_createdAt: new Date().toISOString()')
+  }
+
+  if (def.options.withUpdatedAt) {
+    fields.push('_updatedAt: new Date().toISOString()')
+  }
+
+  if (def.options.withArchivedAt) {
+    fields.push('_archivedAt: null')
+  }
+
+  return fields
 }

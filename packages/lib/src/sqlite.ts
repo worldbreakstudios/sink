@@ -164,7 +164,8 @@ export class FrontendSqliteDatabase {
     columnName: string,
     rawValue: string,
   ): void {
-    const column = this.getTableColumns(tableName).find(
+    const columns = this.getTableColumns(tableName)
+    const column = columns.find(
       (candidate) => candidate.name === columnName,
     )
 
@@ -173,6 +174,15 @@ export class FrontendSqliteDatabase {
     }
 
     const value = coerceInputValue(column, rawValue)
+    const updatedAtColumn = columns.find((candidate) => candidate.name === '_updatedAt')
+
+    if (updatedAtColumn) {
+      this.execute(
+        `UPDATE "${escapeIdentifier(tableName)}" SET "${escapeIdentifier(columnName)}" = ?, "_updatedAt" = ? WHERE rowid = ?;`,
+        [value, new Date().toISOString(), rowId],
+      )
+      return
+    }
 
     this.execute(
       `UPDATE "${escapeIdentifier(tableName)}" SET "${escapeIdentifier(columnName)}" = ? WHERE rowid = ?;`,
@@ -234,6 +244,10 @@ function escapeIdentifier(identifier: string): string {
 function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
   const normalizedName = column.name.toLowerCase()
   const normalizedType = column.type.toUpperCase()
+
+  if (normalizedName === '_archivedat') {
+    return null
+  }
 
   if (normalizedName.endsWith('_at')) {
     return new Date().toISOString()

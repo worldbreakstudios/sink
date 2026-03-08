@@ -42,7 +42,10 @@ export interface SqliteDemoCollectionsWorkspace {
 
 interface MutableSqliteDemoCollection {
   insert: (row: AnyRow) => void
-  update: (key: SqliteDemoId, callback: (draft: Record<string, unknown>) => void) => void
+  update: (
+    key: SqliteDemoId,
+    callback: (draft: Record<string, unknown>) => void,
+  ) => void
 }
 
 function getCollection(
@@ -64,26 +67,28 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
 
   db.execute(
     `
-      INSERT INTO notebooks (_id, name, description, created_at)
+      INSERT INTO notebooks (_id, _createdAt, _updatedAt, name, description)
       VALUES
-        (?, ?, ?, ?),
-        (?, ?, ?, ?);
+        (?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?);
     `,
     [
       inboxId,
+      '2026-03-06T18:00:00.000Z',
+      '2026-03-06T18:00:00.000Z',
       'Inbox',
       'Quick capture workspace',
-      '2026-03-06T18:00:00.000Z',
       workspaceId,
+      '2026-03-06T18:05:00.000Z',
+      '2026-03-06T18:05:00.000Z',
       'Offline-first note store',
       'Demo notebook seeded by the sandbox',
-      '2026-03-06T18:05:00.000Z',
     ],
   )
 
   db.execute(
     `
-      INSERT INTO notes (_id, notebook_id, title, body, status, created_at)
+      INSERT INTO notes (_id, notebook_id, title, body, status, _createdAt)
       VALUES
         (?, ?, ?, ?, ?, ?),
         (?, ?, ?, ?, ?, ?),
@@ -132,7 +137,10 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       const row = database.createInsertableRow(tableName)
 
       return Object.fromEntries(
-        Object.entries(row).map(([key, value]) => [key, value === null ? '' : String(value)]),
+        Object.entries(row).map(([key, value]) => [
+          key,
+          value === null ? '' : String(value),
+        ]),
       )
     },
     queueInsert(tableName, draft, transaction) {
@@ -161,7 +169,9 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
     },
     async insertRow(tableName) {
       const transaction = makeBatchTx()
-      const newRow = database.createInsertableRow(tableName) as unknown as AnyRow
+      const newRow = database.createInsertableRow(
+        tableName,
+      ) as unknown as AnyRow
 
       transaction.mutate(() => {
         getCollection(collections, tableName).insert(newRow)

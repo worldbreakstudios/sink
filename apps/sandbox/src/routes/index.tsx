@@ -174,7 +174,12 @@ function App() {
   const columns = selectedTable?.columns ?? []
   const columnNames = columns.map((column) => column.name)
   const readOnlyColumns = useMemo(
-    () => new Set(columns.filter((column) => column.pk).map((column) => column.name)),
+    () =>
+      new Set(
+        columns
+          .filter((column) => column.pk || column.name.startsWith('_'))
+          .map((column) => column.name),
+      ),
     [columns],
   )
   const modalTable = useMemo(
@@ -182,7 +187,10 @@ function App() {
     [insertModal?.tableName, tables],
   )
   const editableInsertColumns = useMemo(
-    () => modalTable?.columns.filter((column) => column.pk === 0) ?? [],
+    () =>
+      modalTable?.columns.filter(
+        (column) => column.pk === 0 && !column.name.startsWith('_'),
+      ) ?? [],
     [modalTable],
   )
   const tableCounts = useMemo(

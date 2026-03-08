@@ -152,7 +152,8 @@ function insertRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number>,
   row: TRow,
 ): void {
-  const entries = Object.entries(row)
+  const completeRow = withInsertSystemFields(options, row)
+  const entries = Object.entries(completeRow)
 
   if (entries.length === 0) {
     options.database.execute(
@@ -162,7 +163,7 @@ function insertRow<TRow extends object>(
   }
 
   const columns = entries.map(([column]) => `"${escapeIdentifier(column)}"`)
-  const values = entries.map(([, value]) => value)
+  const values = entries.map(([, value]) => value) as any[]
   const placeholders = entries.map(() => '?')
 
   options.database.execute(
@@ -175,7 +176,8 @@ function updateRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number>,
   mutation: PendingMutation<TRow>,
 ): void {
-  const entries = Object.entries(mutation.changes).filter(
+  const changes = withUpdateSystemFields(options, mutation.changes)
+  const entries = Object.entries(changes).filter(
     ([column]) => column !== options.keyColumn,
   )
 
@@ -186,7 +188,7 @@ function updateRow<TRow extends object>(
   const assignments = entries.map(
     ([column]) => `"${escapeIdentifier(column)}" = ?`,
   )
-  const values = entries.map(([, value]) => value)
+  const values = entries.map(([, value]) => value) as any[]
 
   options.database.execute(
     `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(', ')} WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
@@ -206,4 +208,44 @@ function deleteRow<TRow extends object>(
 
 function escapeIdentifier(identifier: string): string {
   return identifier.replaceAll('"', '""')
+}
+
+function withInsertSystemFields<TRow extends object>(
+  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  row: TRow,
+): Record<string, unknown> {
+  const nextRow = { ...(row as Record<string, unknown>) }
+  const columnNames = new Set(
+    options.database.getTableColumns(options.tableName).map((column) => column.name),
+  )
+
+  if (columnNames.has('_createdAt') && nextRow._createdAt === undefined) {
+    nextRow._createdAt = new Date().toISOString()
+  }
+
+  if (columnNames.has('_updatedAt') && nextRow._updatedAt === undefined) {
+    nextRow._updatedAt = new Date().toISOString()
+  }
+
+  if (columnNames.has('_archivedAt') && nextRow._archivedAt === undefined) {
+    nextRow._archivedAt = null
+  }
+
+  return nextRow
+}
+
+function withUpdateSystemFields<TRow extends object>(
+  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  changes: Partial<TRow>,
+): Record<string, unknown> {
+  const nextChanges = { ...(changes as Record<string, unknown>) }
+  const columnNames = new Set(
+    options.database.getTableColumns(options.tableName).map((column) => column.name),
+  )
+
+  if (columnNames.has('_updatedAt')) {
+    nextChanges._updatedAt = new Date().toISOString()
+  }
+
+  return nextChanges
 }
