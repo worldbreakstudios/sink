@@ -147,8 +147,8 @@ export class FrontendSqliteDatabase {
     const row: SqliteRow = {}
 
     for (const column of columns) {
-      if (isGeneratedPrimaryKey(column)) {
-        row[column.name] = this.getNextPrimaryKeyValue(tableName, column.name)
+      if (column.pk === 1) {
+        row[column.name] = this.createPrimaryKeyValue(tableName, column)
         continue
       }
 
@@ -181,24 +181,35 @@ export class FrontendSqliteDatabase {
   }
 
   insertRow(tableName: string): void {
-    const columns = this.getTableColumns(tableName)
-    const insertableColumns = columns.filter((column) => !isGeneratedPrimaryKey(column))
+    const row = this.createInsertableRow(tableName)
+    const entries = Object.entries(row)
 
-    if (insertableColumns.length === 0) {
+    if (entries.length === 0) {
       this.execute(`INSERT INTO "${escapeIdentifier(tableName)}" DEFAULT VALUES;`)
       return
     }
 
-    const columnNames = insertableColumns.map(
-      (column) => `"${escapeIdentifier(column.name)}"`,
-    )
-    const placeholders = insertableColumns.map(() => '?')
-    const values = insertableColumns.map(createDefaultValueForColumn)
+    const columnNames = entries.map(([columnName]) => `"${escapeIdentifier(columnName)}"`)
+    const placeholders = entries.map(() => '?')
+    const values = entries.map(([, value]) => value)
 
     this.execute(
       `INSERT INTO "${escapeIdentifier(tableName)}" (${columnNames.join(', ')}) VALUES (${placeholders.join(', ')});`,
       values,
     )
+  }
+
+  private createPrimaryKeyValue(
+    tableName: string,
+    column: SqliteTableColumn,
+  ): SqlValue {
+    const normalizedType = column.type.toUpperCase()
+
+    if (normalizedType.includes('INT')) {
+      return this.getNextPrimaryKeyValue(tableName, column.name)
+    }
+
+    return createUuid()
   }
 
   private getNextPrimaryKeyValue(tableName: string, columnName: string): number {
@@ -220,20 +231,12 @@ function escapeIdentifier(identifier: string): string {
   return identifier.replaceAll('"', '""')
 }
 
-function isGeneratedPrimaryKey(column: SqliteTableColumn): boolean {
-  return column.pk === 1 && column.type.toUpperCase() === 'INTEGER'
-}
-
 function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
   const normalizedName = column.name.toLowerCase()
   const normalizedType = column.type.toUpperCase()
 
   if (normalizedName.endsWith('_at')) {
     return new Date().toISOString()
-  }
-
-  if (normalizedName.endsWith('_id')) {
-    return 1
   }
 
   if (normalizedType.includes('INT')) {
@@ -279,5 +282,15 @@ function coerceInputValue(column: SqliteTableColumn, rawValue: string): SqlValue
   }
 
   return rawValue
+}
+
+function createUuid(): string {
+  const randomUuid = globalThis.crypto?.randomUUID
+
+  if (typeof randomUuid === 'function') {
+    return randomUuid.call(globalThis.crypto)
+  }
+
+  throw new Error('crypto.randomUUID() is not available in this environment.')
 }
 

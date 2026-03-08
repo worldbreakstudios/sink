@@ -7,11 +7,13 @@ import {
 } from '@/data/generated/schema.gen'
 import type {
   AnyRow,
+  Id,
   SchemaCollections,
   TableName,
 } from '@/data/generated/schema.gen'
 
 export type SqliteDemoRow = AnyRow
+export type SqliteDemoId = Id<TableName>
 export type SqliteDemoTableName = TableName
 export type SqliteInsertDraft = Record<string, string>
 
@@ -30,7 +32,7 @@ export interface SqliteDemoCollectionsWorkspace {
   ) => void
   updateCell: (
     tableName: SqliteDemoTableName,
-    key: number,
+    key: SqliteDemoId,
     columnName: string,
     value: string,
   ) => Promise<void>
@@ -40,7 +42,7 @@ export interface SqliteDemoCollectionsWorkspace {
 
 interface MutableSqliteDemoCollection {
   insert: (row: AnyRow) => void
-  update: (key: number, callback: (draft: Record<string, unknown>) => void) => void
+  update: (key: SqliteDemoId, callback: (draft: Record<string, unknown>) => void) => void
 }
 
 function getCollection(
@@ -52,20 +54,27 @@ function getCollection(
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const db = await FrontendSqliteDatabase.createInMemory()
+  const inboxId = '11111111-1111-4111-8111-111111111111'
+  const workspaceId = '22222222-2222-4222-8222-222222222222'
+  const noteOneId = '33333333-3333-4333-8333-333333333333'
+  const noteTwoId = '44444444-4444-4444-8444-444444444444'
+  const noteThreeId = '55555555-5555-4555-8555-555555555555'
 
   createAllTables(db)
 
   db.execute(
     `
-      INSERT INTO notebooks (name, description, created_at)
+      INSERT INTO notebooks (_id, name, description, created_at)
       VALUES
-        (?, ?, ?),
-        (?, ?, ?);
+        (?, ?, ?, ?),
+        (?, ?, ?, ?);
     `,
     [
+      inboxId,
       'Inbox',
       'Quick capture workspace',
       '2026-03-06T18:00:00.000Z',
+      workspaceId,
       'Offline-first note store',
       'Demo notebook seeded by the sandbox',
       '2026-03-06T18:05:00.000Z',
@@ -74,12 +83,32 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
 
   db.execute(
     `
-      INSERT INTO notes (notebook_id, title, body, status, created_at)
+      INSERT INTO notes (_id, notebook_id, title, body, status, created_at)
       VALUES
-        (1, 'Capture SQLite wrapper ideas', 'Start with schema inspection and query helpers.', 'open', '2026-03-06T18:10:00.000Z'),
-        (1, 'Support migrations', 'Track schema changes in one place.', 'draft', '2026-03-06T18:12:00.000Z'),
-        (2, 'Prototype table browser', 'Render schemas and row data in the sandbox.', 'open', '2026-03-06T18:15:00.000Z');
+        (?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?);
     `,
+    [
+      noteOneId,
+      inboxId,
+      'Capture SQLite wrapper ideas',
+      'Start with schema inspection and query helpers.',
+      'open',
+      '2026-03-06T18:10:00.000Z',
+      noteTwoId,
+      inboxId,
+      'Support migrations',
+      'Track schema changes in one place.',
+      'draft',
+      '2026-03-06T18:12:00.000Z',
+      noteThreeId,
+      workspaceId,
+      'Prototype table browser',
+      'Render schemas and row data in the sandbox.',
+      'open',
+      '2026-03-06T18:15:00.000Z',
+    ],
   )
 
   return db

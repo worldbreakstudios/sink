@@ -1,7 +1,6 @@
 import { defineTable, v } from '@sink/lib'
 
 export default defineTable('objects', {
-  id: v.id(),
-  type_id: v.string(),
+  type_id: v.id('objectTypes'),
   created_at: v.string(),
-}, { orderBy: 'id ASC' })
+}, { orderBy: '_id ASC' })

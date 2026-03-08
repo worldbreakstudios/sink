@@ -23,12 +23,12 @@ export async function loadSchemaFiles(
       throw new Error(`Duplicate table name: "${def.tableName}"`)
     }
 
-    const idColumns = Object.entries(def.columns).filter(
+    const primaryKeyColumns = Object.entries(def.columns).filter(
       ([, col]) => col.isPrimaryKey,
     )
-    if (idColumns.length !== 1) {
+    if (primaryKeyColumns.length > 0) {
       throw new Error(
-        `Table "${def.tableName}" must have exactly one v.id() column, found ${idColumns.length}`,
+        `Table "${def.tableName}" cannot declare a primary key column; "_id" is implicit.`,
       )
     }
 

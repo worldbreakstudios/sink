@@ -12,12 +12,21 @@ export function emit(definitions: TableDefinition[]): string {
   )
   lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
+  lines.push(
+    "export type Id<TTableName extends string> = string & { readonly __tableName: TTableName }",
+  )
+  lines.push('')
+  lines.push('function createId<TTableName extends string>(): Id<TTableName> {')
+  lines.push("  return globalThis.crypto.randomUUID() as Id<TTableName>")
+  lines.push('}')
+  lines.push('')
 
   // Row type interfaces
   for (const def of definitions) {
     lines.push(`export interface ${rowTypeName(def.tableName)} {`)
+    lines.push(`  _id: ${systemIdTsType(def.tableName)}`)
     for (const [colName, col] of Object.entries(def.columns)) {
-      lines.push(`  ${colName}: ${col.tsType}`)
+      lines.push(`  ${colName}: ${renderTsType(col)}`)
     }
     lines.push('}')
     lines.push('')
@@ -32,7 +41,7 @@ export function emit(definitions: TableDefinition[]): string {
   for (const def of definitions) {
     const constName = `SQL_CREATE_${def.tableName.toUpperCase()}`
     lines.push(`export const ${constName} = \`CREATE TABLE IF NOT EXISTS "${def.tableName}" (`)
-    const colDefs: string[] = []
+    const colDefs: string[] = ['  "_id" TEXT PRIMARY KEY']
     for (const [colName, col] of Object.entries(def.columns)) {
       let colDef = `  "${colName}" ${col.sqliteType}`
       if (col.defaultValue !== undefined) {
@@ -72,9 +81,8 @@ export function emit(definitions: TableDefinition[]): string {
   // SchemaCollections interface
   lines.push('export interface SchemaCollections {')
   for (const def of definitions) {
-    const pk = getPrimaryKey(def)
     lines.push(
-      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${pk.tsType}>`,
+      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}>`,
     )
   }
   lines.push('}')
@@ -86,13 +94,14 @@ export function emit(definitions: TableDefinition[]): string {
   )
   lines.push('  return {')
   for (const def of definitions) {
-    const pk = getPrimaryKeyEntry(def)
     const orderBy = def.options.orderBy
-    lines.push(`    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${pk.col.tsType}>({`)
+    lines.push(
+      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}>({`,
+    )
     lines.push(`      id: 'sqlite-${def.tableName}',`)
     lines.push(`      tableName: '${def.tableName}',`)
-    lines.push(`      keyColumn: '${pk.name}',`)
-    lines.push(`      getKey: (row) => row.${pk.name},`)
+    lines.push(`      keyColumn: '_id',`)
+    lines.push(`      getKey: (row) => row._id,`)
     lines.push(`      database: db,`)
     if (orderBy) {
       lines.push(`      orderBy: '${orderBy}',`)
@@ -123,19 +132,22 @@ export function emit(definitions: TableDefinition[]): string {
 
   // Per-table CRUD helpers
   for (const def of definitions) {
-    const pk = getPrimaryKeyEntry(def)
     const rowType = rowTypeName(def.tableName)
     const singular = singularize(def.tableName)
     const plural = def.tableName
+    const rowIdType = systemIdTsType(def.tableName)
 
     // insertX (single)
     lines.push(
-      `export function insert${pascal(singular)}(collections: SchemaCollections, row: Omit<${rowType}, '${pk.name}'>) {`,
+      `export function insert${pascal(singular)}(collections: SchemaCollections, row: Omit<${rowType}, '_id'>) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push(
-      `    collections.${def.tableName}.insert(row as unknown as ${rowType})`,
+      `    const completeRow = { _id: createId<'${def.tableName}'>(), ...row } as ${rowType}`,
+    )
+    lines.push(
+      `    collections.${def.tableName}.insert(completeRow)`,
     )
     lines.push('  })')
     lines.push('  return tx.isPersisted.promise')
@@ -144,12 +156,12 @@ export function emit(definitions: TableDefinition[]): string {
 
     // updateX (single)
     lines.push(
-      `export function update${pascal(singular)}(collections: SchemaCollections, ${pk.name}: ${pk.col.tsType}, changes: Partial<Omit<${rowType}, '${pk.name}'>>) {`,
+      `export function update${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}, changes: Partial<Omit<${rowType}, '_id'>>) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push(
-      `    collections.${def.tableName}.update(${pk.name}, (draft) => { Object.assign(draft, changes) })`,
+      `    collections.${def.tableName}.update(_id, (draft) => { Object.assign(draft, changes) })`,
     )
     lines.push('  })')
     lines.push('  return tx.isPersisted.promise')
@@ -158,11 +170,11 @@ export function emit(definitions: TableDefinition[]): string {
 
     // deleteX (single)
     lines.push(
-      `export function delete${pascal(singular)}(collections: SchemaCollections, ${pk.name}: ${pk.col.tsType}) {`,
+      `export function delete${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
-    lines.push(`    collections.${def.tableName}.delete(${pk.name})`)
+    lines.push(`    collections.${def.tableName}.delete(_id)`)
     lines.push('  })')
     lines.push('  return tx.isPersisted.promise')
     lines.push('}')
@@ -170,13 +182,16 @@ export function emit(definitions: TableDefinition[]): string {
 
     // insertXs (batch)
     lines.push(
-      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Omit<${rowType}, '${pk.name}'>[]) {`,
+      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Omit<${rowType}, '_id'>[]) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push('    for (const row of rows) {')
     lines.push(
-      `      collections.${def.tableName}.insert(row as unknown as ${rowType})`,
+      `      const completeRow = { _id: createId<'${def.tableName}'>(), ...row } as ${rowType}`,
+    )
+    lines.push(
+      `      collections.${def.tableName}.insert(completeRow)`,
     )
     lines.push('    }')
     lines.push('  })')
@@ -186,13 +201,13 @@ export function emit(definitions: TableDefinition[]): string {
 
     // updateXs (batch)
     lines.push(
-      `export function update${pascal(plural)}(collections: SchemaCollections, updates: Array<{ ${pk.name}: ${pk.col.tsType}; changes: Partial<Omit<${rowType}, '${pk.name}'>> }>) {`,
+      `export function update${pascal(plural)}(collections: SchemaCollections, updates: Array<{ _id: ${rowIdType}; changes: Partial<Omit<${rowType}, '_id'>> }>) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push('    for (const u of updates) {')
     lines.push(
-      `      collections.${def.tableName}.update(u.${pk.name}, (draft) => { Object.assign(draft, u.changes) })`,
+      `      collections.${def.tableName}.update(u._id, (draft) => { Object.assign(draft, u.changes) })`,
     )
     lines.push('    }')
     lines.push('  })')
@@ -202,12 +217,12 @@ export function emit(definitions: TableDefinition[]): string {
 
     // deleteXs (batch)
     lines.push(
-      `export function delete${pascal(plural)}(collections: SchemaCollections, ids: ${pk.col.tsType}[]) {`,
+      `export function delete${pascal(plural)}(collections: SchemaCollections, ids: ${rowIdType}[]) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
-    lines.push(`    for (const ${pk.name} of ids) {`)
-    lines.push(`      collections.${def.tableName}.delete(${pk.name})`)
+    lines.push('    for (const _id of ids) {')
+    lines.push(`      collections.${def.tableName}.delete(_id)`)
     lines.push('    }')
     lines.push('  })')
     lines.push('  return tx.isPersisted.promise')
@@ -252,17 +267,16 @@ function sqlLiteral(value: unknown): string {
   return 'NULL'
 }
 
-function getPrimaryKey(def: TableDefinition): ColumnDescriptor {
-  return getPrimaryKeyEntry(def).col
+function renderTsType(col: ColumnDescriptor): string {
+  if (col.referencedTable !== undefined) {
+    return col.isNullable
+      ? `Id<'${col.referencedTable}'> | null`
+      : `Id<'${col.referencedTable}'>`
+  }
+
+  return col.tsType
 }
 
-function getPrimaryKeyEntry(
-  def: TableDefinition,
-): { name: string; col: ColumnDescriptor } {
-  for (const [name, col] of Object.entries(def.columns)) {
-    if (col.isPrimaryKey) {
-      return { name, col }
-    }
-  }
-  throw new Error(`No primary key found in table "${def.tableName}"`)
+function systemIdTsType(tableName: string): string {
+  return `Id<'${tableName}'>`
 }

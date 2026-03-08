@@ -1,10 +1,9 @@
 import { defineTable, v } from '@sink/lib'
 
 export default defineTable('notes', {
-  id: v.id(),
-  notebook_id: v.number(),
+  notebook_id: v.id('notebooks'),
   title: v.string(),
   body: v.string(),
   status: v.string(),
   created_at: v.string(),
-}, { orderBy: 'id ASC' })
+}, { orderBy: '_id ASC' })

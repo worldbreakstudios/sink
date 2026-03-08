@@ -35,6 +35,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   createSqliteDemoCollectionsWorkspace,
   type SqliteDemoCollectionsWorkspace,
+  type SqliteDemoId,
   type SqliteDemoRow,
   type SqliteDemoTableName,
   type SqliteInsertDraft,
@@ -85,7 +86,7 @@ function App() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string>('')
   const [editingCell, setEditingCell] = useState<{
-    rowId: number
+    rowId: SqliteDemoId
     columnName: string
     value: string
   } | null>(null)
@@ -146,7 +147,7 @@ function App() {
       workspace !== null && selectedTable !== undefined
         ? (workspace.collections[
             selectedTable.name as SqliteDemoTableName
-          ] as unknown as SqliteCollection<SqliteDemoRow, number>)
+          ] as unknown as SqliteCollection<SqliteDemoRow, SqliteDemoId>)
         : undefined,
     [selectedTable?.name, workspace],
   )
@@ -170,7 +171,20 @@ function App() {
 
   const selectedRows = (selectedRowsQuery.data ?? []) as SqliteDemoRow[]
 
-  const columnNames = selectedTable?.columns.map((column) => column.name) ?? []
+  const columns = selectedTable?.columns ?? []
+  const columnNames = columns.map((column) => column.name)
+  const readOnlyColumns = useMemo(
+    () => new Set(columns.filter((column) => column.pk).map((column) => column.name)),
+    [columns],
+  )
+  const modalTable = useMemo(
+    () => tables.find((table) => table.name === insertModal?.tableName),
+    [insertModal?.tableName, tables],
+  )
+  const editableInsertColumns = useMemo(
+    () => modalTable?.columns.filter((column) => column.pk === 0) ?? [],
+    [modalTable],
+  )
   const tableCounts = useMemo(
     () =>
       Object.fromEntries(
@@ -178,13 +192,9 @@ function App() {
       ) as Record<string, number>,
     [tables],
   )
-  const modalTable = useMemo(
-    () => tables.find((table) => table.name === insertModal?.tableName),
-    [insertModal?.tableName, tables],
-  )
 
   const commitCellEdit = useCallback(
-    async (rowId: number, columnName: string, value: string) => {
+    async (rowId: SqliteDemoId, columnName: string, value: string) => {
       if (workspace === null || selectedTable === undefined) {
         return
       }
@@ -354,7 +364,7 @@ function App() {
                   </TableHeader>
                   <TableBody>
                     {selectedRows.map((row) => {
-                      const rowId = Number(row.id)
+                      const rowId = row._id
 
                       return (
                         <TableRow key={`${selectedTable.name}-${rowId}`}>
@@ -416,19 +426,25 @@ function App() {
                                   />
                                 )
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setEditingCell({
-                                      rowId,
-                                      columnName,
-                                      value: formatCellValue(getRowValue(row, columnName)),
-                                    })
-                                  }
-                                  className="w-full text-left text-sm"
-                                >
-                                  {formatCellValue(getRowValue(row, columnName))}
-                                </button>
+                                readOnlyColumns.has(columnName) ? (
+                                  <span className="block w-full text-left text-sm">
+                                    {formatCellValue(getRowValue(row, columnName))}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingCell({
+                                        rowId,
+                                        columnName,
+                                        value: formatCellValue(getRowValue(row, columnName)),
+                                      })
+                                    }
+                                    className="w-full text-left text-sm"
+                                  >
+                                    {formatCellValue(getRowValue(row, columnName))}
+                                  </button>
+                                )
                               )}
                             </TableCell>
                           ))}
@@ -496,7 +512,7 @@ function App() {
               }}
             >
               <div className="grid gap-4">
-                {modalTable.columns.map((column) => (
+                {editableInsertColumns.map((column) => (
                   <div key={column.name} className="grid gap-2">
                     <Label htmlFor={`insert-${column.name}`}>{column.name}</Label>
                     {isMultilineColumn(column.name) ? (
