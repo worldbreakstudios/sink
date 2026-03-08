@@ -220,11 +220,11 @@ function withInsertSystemFields<TRow extends object>(
   )
 
   if (columnNames.has('_createdAt') && nextRow._createdAt === undefined) {
-    nextRow._createdAt = new Date().toISOString()
+    nextRow._createdAt = currentTimestamp()
   }
 
   if (columnNames.has('_updatedAt') && nextRow._updatedAt === undefined) {
-    nextRow._updatedAt = new Date().toISOString()
+    nextRow._updatedAt = currentTimestamp()
   }
 
   if (columnNames.has('_archivedAt') && nextRow._archivedAt === undefined) {
@@ -243,9 +243,13 @@ function withUpdateSystemFields<TRow extends object>(
     options.database.getTableColumns(options.tableName).map((column) => column.name),
   )
 
-  if (columnNames.has('_updatedAt')) {
-    nextChanges._updatedAt = new Date().toISOString()
+  if (columnNames.has('_updatedAt') && nextChanges._updatedAt === undefined) {
+    nextChanges._updatedAt = currentTimestamp()
   }
 
   return nextChanges
+}
+
+function currentTimestamp(): bigint {
+  return BigInt(Date.now())
 }

@@ -179,7 +179,7 @@ export class FrontendSqliteDatabase {
     if (updatedAtColumn) {
       this.execute(
         `UPDATE "${escapeIdentifier(tableName)}" SET "${escapeIdentifier(columnName)}" = ?, "_updatedAt" = ? WHERE rowid = ?;`,
-        [value, new Date().toISOString(), rowId],
+        [value, currentTimestamp(), rowId],
       )
       return
     }
@@ -249,6 +249,10 @@ function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
     return null
   }
 
+  if (normalizedName === '_createdat' || normalizedName === '_updatedat') {
+    return currentTimestamp()
+  }
+
   if (normalizedName.endsWith('_at')) {
     return new Date().toISOString()
   }
@@ -276,6 +280,18 @@ function coerceInputValue(column: SqliteTableColumn, rawValue: string): SqlValue
   }
 
   if (normalizedType.includes('INT')) {
+    if (
+      column.name === '_createdAt' ||
+      column.name === '_updatedAt' ||
+      column.name === '_archivedAt'
+    ) {
+      try {
+        return BigInt(rawValue)
+      } catch {
+        throw new Error(`Expected an integer timestamp for "${column.name}".`)
+      }
+    }
+
     const parsed = Number(rawValue)
 
     if (!Number.isFinite(parsed)) {
@@ -307,5 +323,9 @@ function create128BitId(): string {
   }
 
   throw new Error('crypto.getRandomValues() is not available in this environment.')
+}
+
+function currentTimestamp(): bigint {
+  return BigInt(Date.now())
 }
 

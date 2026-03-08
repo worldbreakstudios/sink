@@ -62,6 +62,11 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const noteOneId = '94a7c31ef20d4b68a15f77c2de983ab4'
   const noteTwoId = 'c18e5d72ab904f36be21d44a89f0c6d3'
   const noteThreeId = '3ea96bf14cd82750a8d2e6719f43bc05'
+  const inboxCreatedAt = 1709748000000n
+  const workspaceCreatedAt = 1709748300000n
+  const noteOneCreatedAt = 1709748600000n
+  const noteTwoCreatedAt = 1709748720000n
+  const noteThreeCreatedAt = 1709748900000n
 
   createAllTables(db)
 
@@ -74,13 +79,13 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
     `,
     [
       inboxId,
-      '2026-03-06T18:00:00.000Z',
-      '2026-03-06T18:00:00.000Z',
+      inboxCreatedAt,
+      inboxCreatedAt,
       'Inbox',
       'Quick capture workspace',
       workspaceId,
-      '2026-03-06T18:05:00.000Z',
-      '2026-03-06T18:05:00.000Z',
+      workspaceCreatedAt,
+      workspaceCreatedAt,
       'Offline-first note store',
       'Demo notebook seeded by the sandbox',
     ],
@@ -100,19 +105,19 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
       'Capture SQLite wrapper ideas',
       'Start with schema inspection and query helpers.',
       'open',
-      '2026-03-06T18:10:00.000Z',
+      noteOneCreatedAt,
       noteTwoId,
       inboxId,
       'Support migrations',
       'Track schema changes in one place.',
       'draft',
-      '2026-03-06T18:12:00.000Z',
+      noteTwoCreatedAt,
       noteThreeId,
       workspaceId,
       'Prototype table browser',
       'Render schemas and row data in the sandbox.',
       'open',
-      '2026-03-06T18:15:00.000Z',
+      noteThreeCreatedAt,
     ],
   )
 

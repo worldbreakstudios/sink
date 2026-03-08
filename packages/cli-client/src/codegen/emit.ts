@@ -29,6 +29,10 @@ export function emit(definitions: TableDefinition[]): string {
   )
   lines.push('}')
   lines.push('')
+  lines.push('function currentTimestamp(): bigint {')
+  lines.push('  return BigInt(Date.now())')
+  lines.push('}')
+  lines.push('')
 
   // Row type interfaces
   for (const def of definitions) {
@@ -159,15 +163,12 @@ export function emit(definitions: TableDefinition[]): string {
     const singular = singularize(def.tableName)
     const plural = def.tableName
     const rowIdType = systemIdTsType(def.tableName)
-    const insertOmittedKeys = [
-      "'_id'",
-      ...getImplicitSystemFields(def).map((field) => `'${field.name}'`),
-    ].join(' | ')
-    const insertSystemFields = getInsertSystemFieldEntries(def)
+    const insertInputType = renderInsertInputType(def, rowType)
+    const insertSystemFields = getInsertSystemFieldEntries(def, 'row')
 
     // insertX (single)
     lines.push(
-      `export function insert${pascal(singular)}(collections: SchemaCollections, row: Omit<${rowType}, ${insertOmittedKeys}>) {`,
+      `export function insert${pascal(singular)}(collections: SchemaCollections, row: ${insertInputType}) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
@@ -189,7 +190,7 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
     lines.push(
-      `    collections.${def.tableName}.update(_id, (draft) => { Object.assign(draft, changes) })`,
+      `    collections.${def.tableName}.update(_id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'changes')}) })`,
     )
     lines.push('  })')
     lines.push('  return tx.isPersisted.promise')
@@ -210,7 +211,7 @@ export function emit(definitions: TableDefinition[]): string {
 
     // insertXs (batch)
     lines.push(
-      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Omit<${rowType}, ${insertOmittedKeys}>[]) {`,
+      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Array<${insertInputType}>) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
@@ -235,7 +236,7 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('  tx.mutate(() => {')
     lines.push('    for (const u of updates) {')
     lines.push(
-      `      collections.${def.tableName}.update(u._id, (draft) => { Object.assign(draft, u.changes) })`,
+      `      collections.${def.tableName}.update(u._id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'u.changes')}) })`,
     )
     lines.push('    }')
     lines.push('  })')
@@ -289,6 +290,9 @@ function sqlLiteral(value: unknown): string {
   if (typeof value === 'string') {
     return `'${value.replace(/'/g, "''")}'`
   }
+  if (typeof value === 'bigint') {
+    return value.toString()
+  }
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value)
   }
@@ -319,44 +323,63 @@ function getImplicitSystemFields(def: TableDefinition): Array<{
   if (def.options.withCreatedAt) {
     fields.push({
       name: '_createdAt',
-      tsType: 'string',
-      sqliteType: 'TEXT NOT NULL',
+      tsType: 'bigint',
+      sqliteType: 'INTEGER NOT NULL',
     })
   }
 
   if (def.options.withUpdatedAt) {
     fields.push({
       name: '_updatedAt',
-      tsType: 'string',
-      sqliteType: 'TEXT NOT NULL',
+      tsType: 'bigint',
+      sqliteType: 'INTEGER NOT NULL',
     })
   }
 
   if (def.options.withArchivedAt) {
     fields.push({
       name: '_archivedAt',
-      tsType: 'string | null',
-      sqliteType: 'TEXT',
+      tsType: 'bigint | null',
+      sqliteType: 'INTEGER',
     })
   }
 
   return fields
 }
 
-function getInsertSystemFieldEntries(def: TableDefinition): string[] {
+function getInsertSystemFieldEntries(def: TableDefinition, sourceName: string): string[] {
   const fields = [`_id: createId<'${def.tableName}'>()`]
 
   if (def.options.withCreatedAt) {
-    fields.push('_createdAt: new Date().toISOString()')
+    fields.push(`_createdAt: ${sourceName}._createdAt ?? currentTimestamp()`)
   }
 
   if (def.options.withUpdatedAt) {
-    fields.push('_updatedAt: new Date().toISOString()')
+    fields.push(`_updatedAt: ${sourceName}._updatedAt ?? currentTimestamp()`)
   }
 
   if (def.options.withArchivedAt) {
-    fields.push('_archivedAt: null')
+    fields.push(`_archivedAt: ${sourceName}._archivedAt ?? null`)
   }
 
   return fields
+}
+
+function renderInsertInputType(def: TableDefinition, rowType: string): string {
+  const systemFieldNames = getImplicitSystemFields(def).map((field) => `'${field.name}'`)
+
+  if (systemFieldNames.length === 0) {
+    return `Omit<${rowType}, '_id'>`
+  }
+
+  const systemFieldsUnion = systemFieldNames.join(' | ')
+  return `Omit<${rowType}, '_id' | ${systemFieldsUnion}> & Partial<Pick<${rowType}, ${systemFieldsUnion}>>`
+}
+
+function renderUpdateAssignment(def: TableDefinition, sourceName: string): string {
+  if (!def.options.withUpdatedAt) {
+    return sourceName
+  }
+
+  return `{ ...${sourceName}, _updatedAt: ${sourceName}._updatedAt ?? currentTimestamp() }`
 }
