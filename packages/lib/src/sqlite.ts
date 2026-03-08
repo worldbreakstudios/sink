@@ -34,6 +34,7 @@ export interface SqliteIndexSnapshot {
   unique: number
   origin: string
   partial: number
+  fields: string[]
 }
 
 export interface SqliteExplorerSnapshot {
@@ -143,6 +144,11 @@ export class FrontendSqliteDatabase {
     }>(`PRAGMA index_list("${escapeIdentifier(tableName)}");`).map((index) => ({
       ...index,
       tableName,
+      fields: this.query<{
+        name: string | null
+      }>(`PRAGMA index_info("${escapeIdentifier(index.name)}");`)
+        .map((field) => field.name)
+        .filter((field): field is string => field !== null),
     }))
   }
 
