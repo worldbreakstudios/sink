@@ -20,6 +20,12 @@ export interface CreateSqliteCollectionOptions<
   getKey: (row: TRow) => TKey
   database: FrontendSqliteDatabase
   orderBy?: string
+  referenceColumns?: Partial<Record<keyof TRow & string, SqliteReferenceColumn>>
+}
+
+export interface SqliteReferenceColumn {
+  referencedTable: string
+  enforceExists: boolean
 }
 
 export interface SqliteCollectionUtils<TRow extends object>
@@ -153,6 +159,7 @@ function insertRow<TRow extends object>(
   row: TRow,
 ): void {
   const completeRow = withInsertSystemFields(options, row)
+  validateReferenceColumns(options, completeRow)
   const entries = Object.entries(completeRow)
 
   if (entries.length === 0) {
@@ -177,6 +184,7 @@ function updateRow<TRow extends object>(
   mutation: PendingMutation<TRow>,
 ): void {
   const changes = withUpdateSystemFields(options, mutation.changes)
+  validateReferenceColumns(options, changes)
   const entries = Object.entries(changes).filter(
     ([column]) => column !== options.keyColumn,
   )
@@ -248,6 +256,33 @@ function withUpdateSystemFields<TRow extends object>(
   }
 
   return nextChanges
+}
+
+function validateReferenceColumns<TRow extends object>(
+  options: CreateSqliteCollectionOptions<TRow, string | number>,
+  rowOrChanges: Record<string, unknown>,
+): void {
+  const referenceColumns = options.referenceColumns as
+    | Record<string, SqliteReferenceColumn | undefined>
+    | undefined
+
+  for (const [columnName, config] of Object.entries(referenceColumns ?? {})) {
+    if (!config?.enforceExists || !(columnName in rowOrChanges)) {
+      continue
+    }
+
+    const value = rowOrChanges[columnName]
+
+    if (value === null || value === undefined || value === '') {
+      continue
+    }
+
+    if (!options.database.rowExists(config.referencedTable, value as any)) {
+      throw new Error(
+        `Referenced ${config.referencedTable} row "${String(value)}" does not exist.`,
+      )
+    }
+  }
 }
 
 function currentTimestamp(): bigint {

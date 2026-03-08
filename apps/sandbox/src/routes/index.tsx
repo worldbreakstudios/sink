@@ -75,6 +75,21 @@ function isMultilineColumn(columnName: string): boolean {
   return columnName === 'body' || columnName === 'description'
 }
 
+function formatReferenceOptionLabel(row: SqliteDemoRow): string {
+  const record = row as unknown as Record<string, unknown>
+  const title = typeof record.title === 'string'
+    ? record.title
+    : typeof record.name === 'string'
+      ? record.name
+      : null
+
+  if (title) {
+    return `${row._id} - ${title}`
+  }
+
+  return row._id
+}
+
 function App() {
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
@@ -521,51 +536,96 @@ function App() {
             >
               <div className="grid gap-4">
                 {editableInsertColumns.map((column) => (
-                  <div key={column.name} className="grid gap-2">
-                    <Label htmlFor={`insert-${column.name}`}>{column.name}</Label>
-                    {isMultilineColumn(column.name) ? (
-                      <Textarea
-                        id={`insert-${column.name}`}
-                        value={insertModal.draft[column.name] ?? ''}
-                        onChange={(event) =>
-                          setInsertModal((currentModal) =>
-                            currentModal === null
-                              ? null
-                              : {
-                                  ...currentModal,
-                                  draft: {
-                                    ...currentModal.draft,
-                                    [column.name]: event.target.value,
-                                  },
-                                },
-                          )
-                        }
-                      />
-                    ) : (
-                      <Input
-                        id={`insert-${column.name}`}
-                        value={insertModal.draft[column.name] ?? ''}
-                        onChange={(event) =>
-                          setInsertModal((currentModal) =>
-                            currentModal === null
-                              ? null
-                              : {
-                                  ...currentModal,
-                                  draft: {
-                                    ...currentModal.draft,
-                                    [column.name]: event.target.value,
-                                  },
-                                },
-                          )
-                        }
-                      />
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      {column.type || 'TEXT'}
-                      {column.pk ? ' • primary key' : ''}
-                      {column.notnull ? ' • required' : ''}
-                    </p>
-                  </div>
+                  (() => {
+                    const referenceColumn = workspace?.getReferenceColumn(
+                      insertModal.tableName,
+                      column.name,
+                    )
+                    const referenceRows = referenceColumn
+                      ? workspace?.readRows(
+                          referenceColumn.referencedTable as SqliteDemoTableName,
+                        ) ?? []
+                      : []
+
+                    return (
+                      <div key={column.name} className="grid gap-2">
+                        <Label htmlFor={`insert-${column.name}`}>{column.name}</Label>
+                        {referenceColumn ? (
+                          <select
+                            id={`insert-${column.name}`}
+                            value={insertModal.draft[column.name] ?? ''}
+                            onChange={(event) =>
+                              setInsertModal((currentModal) =>
+                                currentModal === null
+                                  ? null
+                                  : {
+                                      ...currentModal,
+                                      draft: {
+                                        ...currentModal.draft,
+                                        [column.name]: event.target.value,
+                                      },
+                                    },
+                              )
+                            }
+                            className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                          >
+                            {referenceRows.length === 0 ? (
+                              <option value="">No rows available</option>
+                            ) : null}
+                            {referenceRows.map((row) => (
+                              <option key={row._id} value={row._id}>
+                                {formatReferenceOptionLabel(row)}
+                              </option>
+                            ))}
+                          </select>
+                        ) : isMultilineColumn(column.name) ? (
+                          <Textarea
+                            id={`insert-${column.name}`}
+                            value={insertModal.draft[column.name] ?? ''}
+                            onChange={(event) =>
+                              setInsertModal((currentModal) =>
+                                currentModal === null
+                                  ? null
+                                  : {
+                                      ...currentModal,
+                                      draft: {
+                                        ...currentModal.draft,
+                                        [column.name]: event.target.value,
+                                      },
+                                    },
+                              )
+                            }
+                          />
+                        ) : (
+                          <Input
+                            id={`insert-${column.name}`}
+                            value={insertModal.draft[column.name] ?? ''}
+                            onChange={(event) =>
+                              setInsertModal((currentModal) =>
+                                currentModal === null
+                                  ? null
+                                  : {
+                                      ...currentModal,
+                                      draft: {
+                                        ...currentModal.draft,
+                                        [column.name]: event.target.value,
+                                      },
+                                    },
+                              )
+                            }
+                          />
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          {referenceColumn ? 'ID' : column.type || 'TEXT'}
+                          {referenceColumn
+                            ? ` • references ${referenceColumn.referencedTable}`
+                            : ''}
+                          {column.pk ? ' • primary key' : ''}
+                          {column.notnull ? ' • required' : ''}
+                        </p>
+                      </div>
+                    )
+                  })()
                 ))}
               </div>
 

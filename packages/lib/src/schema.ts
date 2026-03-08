@@ -7,9 +7,14 @@ export interface ColumnDescriptor<
   readonly isPrimaryKey: boolean
   readonly defaultValue: unknown | undefined
   readonly referencedTable: TReferencedTable
+  readonly enforceExists: boolean
 }
 
 export interface RegisteredSchemaTables {}
+
+export interface IdColumnOptions {
+  enforceExists?: boolean
+}
 
 type RegisteredSchemaTableName = keyof RegisteredSchemaTables extends never
   ? string
@@ -30,6 +35,7 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
+      enforceExists: false,
     })
   },
 
@@ -41,6 +47,7 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
+      enforceExists: false,
     })
   },
 
@@ -52,6 +59,7 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
+      enforceExists: false,
     })
   },
 
@@ -63,11 +71,13 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
+      enforceExists: false,
     })
   },
 
   id<TTableName extends RegisteredSchemaTableName>(
     tableName: TTableName,
+    options: IdColumnOptions = {},
   ): ColumnDescriptor<TTableName> {
     return freeze({
       sqliteType: 'TEXT NOT NULL',
@@ -76,6 +86,7 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: tableName,
+      enforceExists: options.enforceExists ?? false,
     })
   },
 
@@ -92,6 +103,7 @@ export const v = {
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: inner.referencedTable,
+      enforceExists: inner.enforceExists,
     })
   },
 
@@ -106,6 +118,7 @@ export const v = {
       isPrimaryKey: inner.isPrimaryKey,
       defaultValue: value,
       referencedTable: inner.referencedTable,
+      enforceExists: inner.enforceExists,
     })
   },
 } as const

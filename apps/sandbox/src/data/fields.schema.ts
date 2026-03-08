@@ -3,8 +3,8 @@ import { defineTable, v } from '@sink/lib'
 export default defineTable(
   'fields',
   {
-    object_id: v.id('objects'),
-    field_type_id: v.id('fieldTypes'),
+    object_id: v.id('objects', { enforceExists: true }),
+    field_type_id: v.id('fieldTypes', { enforceExists: true }),
     name: v.string(),
     body: v.string(),
   },

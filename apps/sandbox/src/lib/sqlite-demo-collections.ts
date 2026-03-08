@@ -1,6 +1,8 @@
 import type { TransactionConfig } from '@tanstack/db'
 import { FrontendSqliteDatabase } from '@sink/lib'
+import type { SqliteReferenceColumn } from '@sink/lib'
 import {
+  REFERENCE_COLUMNS,
   createAllTables,
   createBatchTransaction,
   createCollections,
@@ -20,6 +22,11 @@ export type SqliteInsertDraft = Record<string, string>
 export interface SqliteDemoCollectionsWorkspace {
   database: FrontendSqliteDatabase
   collections: SchemaCollections
+  getReferenceColumn: (
+    tableName: SqliteDemoTableName,
+    columnName: string,
+  ) => SqliteReferenceColumn | null
+  readRows: (tableName: SqliteDemoTableName) => SqliteDemoRow[]
   inspectTables: FrontendSqliteDatabase['inspectTables']
   createBatchTransaction: (
     config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
@@ -46,6 +53,9 @@ interface MutableSqliteDemoCollection {
     key: SqliteDemoId,
     callback: (draft: Record<string, unknown>) => void,
   ) => void
+  utils: {
+    readAll: () => AnyRow[]
+  }
 }
 
 function getCollection(
@@ -73,10 +83,28 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
   return {
     database,
     collections,
+    getReferenceColumn(tableName, columnName) {
+      return REFERENCE_COLUMNS[tableName][columnName] ?? null
+    },
+    readRows(tableName) {
+      return getCollection(collections, tableName).utils.readAll()
+    },
     inspectTables: database.inspectTables.bind(database),
     createBatchTransaction: makeBatchTx,
     createInsertDraft(tableName) {
       const row = database.createInsertableRow(tableName)
+
+      for (const [columnName, config] of Object.entries(REFERENCE_COLUMNS[tableName])) {
+        if (!config) {
+          continue
+        }
+
+        const referencedRows = getCollection(
+          collections,
+          config.referencedTable as SqliteDemoTableName,
+        ).utils.readAll()
+        row[columnName] = referencedRows[0]?._id ?? ''
+      }
 
       return Object.fromEntries(
         Object.entries(row).map(([key, value]) => [

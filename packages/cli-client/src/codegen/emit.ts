@@ -8,7 +8,7 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push("import type { TransactionConfig } from '@tanstack/db'")
   lines.push("import { createTransaction } from '@tanstack/db'")
   lines.push(
-    "import type { FrontendSqliteDatabase, SqliteCollection } from '@sink/lib'",
+    "import type { FrontendSqliteDatabase, SqliteCollection, SqliteReferenceColumn } from '@sink/lib'",
   )
   lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
@@ -104,6 +104,25 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push('  }')
   lines.push('}')
   lines.push('')
+  lines.push('export type ReferenceColumns = Record<')
+  lines.push('  TableName,')
+  lines.push("  Partial<Record<string, SqliteReferenceColumn>>")
+  lines.push('>')
+  lines.push('')
+  lines.push('export const REFERENCE_COLUMNS: ReferenceColumns = {')
+  for (const def of definitions) {
+    lines.push(`  ${def.tableName}: {`)
+    for (const [columnName, col] of Object.entries(def.columns)) {
+      if (col.referencedTable !== undefined) {
+        lines.push(
+          `    ${columnName}: { referencedTable: '${col.referencedTable}', enforceExists: ${col.enforceExists} },`,
+        )
+      }
+    }
+    lines.push('  },')
+  }
+  lines.push('}')
+  lines.push('')
 
   // SchemaCollections interface
   lines.push('export interface SchemaCollections {')
@@ -130,6 +149,7 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push(`      keyColumn: '_id',`)
     lines.push(`      getKey: (row) => row._id,`)
     lines.push(`      database: db,`)
+    lines.push(`      referenceColumns: REFERENCE_COLUMNS.${def.tableName},`)
     if (orderBy) {
       lines.push(`      orderBy: '${orderBy}',`)
     }

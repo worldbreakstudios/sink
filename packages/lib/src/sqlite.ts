@@ -126,6 +126,15 @@ export class FrontendSqliteDatabase {
     )
   }
 
+  rowExists(tableName: string, id: SqlValue, keyColumn = '_id'): boolean {
+    const result = this.query<{ matches: number }>(
+      `SELECT COUNT(*) AS matches FROM "${escapeIdentifier(tableName)}" WHERE "${escapeIdentifier(keyColumn)}" = ?;`,
+      [id],
+    )
+
+    return (result[0]?.matches ?? 0) > 0
+  }
+
   coerceTableValue(
     tableName: string,
     columnName: string,
