@@ -474,14 +474,17 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
 
   for (const index of def.indexes) {
     const tieBreaker = def.options.withCreatedAt ? '_createdAt' : '_id'
+    const indexFields = index.unique
+      ? [...index.fields]
+      : [...index.fields, tieBreaker]
     indexes.push({
       name: index.name,
-      fields: [...index.fields, tieBreaker],
+      fields: indexFields,
       unique: index.unique,
       createSql: createIndexSql(
         def.tableName,
         index.name,
-        [...index.fields, tieBreaker],
+        indexFields,
         index.unique,
       ),
     })

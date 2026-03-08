@@ -68,6 +68,7 @@ function getCollection(
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const db = await FrontendSqliteDatabase.createInMemory()
   const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
+  const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
   const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
   const noteObjectTypeId = '24a7c31ef20d4b68a15f77c2de983ab4'
   const taskObjectTypeId = '38e5d72ab904f36be21d44a89f0c6d3f'
@@ -88,9 +89,17 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
       INSERT INTO fieldTypes (_id, name)
       VALUES
         (?, ?),
+        (?, ?),
         (?, ?);
     `,
-    [textFieldTypeId, 'text', statusFieldTypeId, 'status'],
+    [
+      textFieldTypeId,
+      'text',
+      richTextFieldTypeId,
+      'rich_text',
+      statusFieldTypeId,
+      'status',
+    ],
   )
 
   db.execute(
@@ -138,7 +147,7 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
       bodyFieldId,
       bodyFieldCreatedAt,
       inboxObjectId,
-      textFieldTypeId,
+      richTextFieldTypeId,
       'body',
       'Initial sandbox note body',
       statusFieldId,
