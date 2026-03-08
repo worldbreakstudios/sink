@@ -8,5 +8,5 @@ export default defineTable(
     body: v.string(),
     status: v.string(),
   },
-  { orderBy: '_id ASC' },
+  { orderBy: '_createdAt ASC' },
 ).withCreatedAt(true)

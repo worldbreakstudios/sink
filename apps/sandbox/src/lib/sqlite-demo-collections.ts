@@ -64,9 +64,9 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const noteThreeId = '3ea96bf14cd82750a8d2e6719f43bc05'
   const inboxCreatedAt = 1709748000000n
   const workspaceCreatedAt = 1709748300000n
-  const noteOneCreatedAt = 1709748600000n
-  const noteTwoCreatedAt = 1709748720000n
-  const noteThreeCreatedAt = 1709748900000n
+  const noteOneCreatedAt = 1709748600001n
+  const noteTwoCreatedAt = 1709748720003n
+  const noteThreeCreatedAt = 1709748900002n
 
   createAllTables(db)
 
