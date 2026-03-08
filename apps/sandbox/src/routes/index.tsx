@@ -93,6 +93,7 @@ function formatReferenceOptionLabel(row: SqliteDemoRow): string {
 function App() {
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
+  const [tableCountsRevision, setTableCountsRevision] = useState(0)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
@@ -209,11 +210,21 @@ function App() {
     [modalTable],
   )
   const tableCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        tables.map((table) => [table.name, table.rows.length]),
-      ) as Record<string, number>,
-    [tables],
+    () => {
+      if (workspace === null) {
+        return Object.fromEntries(
+          tables.map((table) => [table.name, table.rows.length]),
+        ) as Record<string, number>
+      }
+
+      return Object.fromEntries(
+        tables.map((table) => [
+          table.name,
+          workspace.readRows(table.name as SqliteDemoTableName).length,
+        ]),
+      ) as Record<string, number>
+    },
+    [tableCountsRevision, tables, workspace, selectedRowsQuery.data],
   )
   const selectedTableIndexes = useMemo(
     () =>
@@ -300,6 +311,8 @@ function App() {
           columnName,
           value,
         )
+        refreshSnapshot(workspace)
+        setTableCountsRevision((current) => current + 1)
         setActionError(null)
         setEditingCell(null)
       } catch (error) {
@@ -308,7 +321,7 @@ function App() {
         )
       }
     },
-    [selectedTable, workspace],
+    [refreshSnapshot, selectedTable, workspace],
   )
 
   const closeInsertModal = useCallback(() => {
@@ -639,6 +652,8 @@ function App() {
                     insertModal.transaction,
                   )
                   await insertModal.transaction.commit()
+                  refreshSnapshot(workspace)
+                  setTableCountsRevision((current) => current + 1)
                   setActionError(null)
                   setInsertModal(null)
                 } catch (error) {
