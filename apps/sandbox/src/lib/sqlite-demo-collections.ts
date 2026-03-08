@@ -54,11 +54,11 @@ function getCollection(
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const db = await FrontendSqliteDatabase.createInMemory()
-  const inboxId = '11111111-1111-4111-8111-111111111111'
-  const workspaceId = '22222222-2222-4222-8222-222222222222'
-  const noteOneId = '33333333-3333-4333-8333-333333333333'
-  const noteTwoId = '44444444-4444-4444-8444-444444444444'
-  const noteThreeId = '55555555-5555-4555-8555-555555555555'
+  const inboxId = '7f4c2a9d1e8b6c3055d4f913a27be1c0'
+  const workspaceId = '2bd91f0a6c7e4d3fb185aa9246ce8f71'
+  const noteOneId = '94a7c31ef20d4b68a15f77c2de983ab4'
+  const noteTwoId = 'c18e5d72ab904f36be21d44a89f0c6d3'
+  const noteThreeId = '3ea96bf14cd82750a8d2e6719f43bc05'
 
   createAllTables(db)
 

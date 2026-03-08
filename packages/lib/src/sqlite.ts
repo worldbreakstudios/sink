@@ -209,7 +209,7 @@ export class FrontendSqliteDatabase {
       return this.getNextPrimaryKeyValue(tableName, column.name)
     }
 
-    return createUuid()
+    return create128BitId()
   }
 
   private getNextPrimaryKeyValue(tableName: string, columnName: string): number {
@@ -284,13 +284,14 @@ function coerceInputValue(column: SqliteTableColumn, rawValue: string): SqlValue
   return rawValue
 }
 
-function createUuid(): string {
-  const randomUuid = globalThis.crypto?.randomUUID
+function create128BitId(): string {
+  const cryptoApi = globalThis.crypto
 
-  if (typeof randomUuid === 'function') {
-    return randomUuid.call(globalThis.crypto)
+  if (cryptoApi?.getRandomValues) {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16))
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
   }
 
-  throw new Error('crypto.randomUUID() is not available in this environment.')
+  throw new Error('crypto.getRandomValues() is not available in this environment.')
 }
 

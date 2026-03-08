@@ -1,13 +1,23 @@
-export interface ColumnDescriptor {
+export interface ColumnDescriptor<
+  TReferencedTable extends string | undefined = undefined,
+> {
   readonly sqliteType: string
   readonly tsType: string
   readonly isNullable: boolean
   readonly isPrimaryKey: boolean
   readonly defaultValue: unknown | undefined
-  readonly referencedTable: string | undefined
+  readonly referencedTable: TReferencedTable
 }
 
-function freeze(descriptor: ColumnDescriptor): ColumnDescriptor {
+export interface RegisteredSchemaTables {}
+
+type RegisteredSchemaTableName = keyof RegisteredSchemaTables extends never
+  ? string
+  : Extract<keyof RegisteredSchemaTables, string>
+
+function freeze<TReferencedTable extends string | undefined>(
+  descriptor: ColumnDescriptor<TReferencedTable>,
+): ColumnDescriptor<TReferencedTable> {
   return Object.freeze(descriptor)
 }
 
@@ -56,7 +66,9 @@ export const v = {
     })
   },
 
-  id(tableName: string): ColumnDescriptor {
+  id<TTableName extends RegisteredSchemaTableName>(
+    tableName: TTableName,
+  ): ColumnDescriptor<TTableName> {
     return freeze({
       sqliteType: 'TEXT NOT NULL',
       tsType: 'string',
@@ -67,7 +79,9 @@ export const v = {
     })
   },
 
-  nullable(inner: ColumnDescriptor): ColumnDescriptor {
+  nullable<TReferencedTable extends string | undefined>(
+    inner: ColumnDescriptor<TReferencedTable>,
+  ): ColumnDescriptor<TReferencedTable> {
     const sqliteType = inner.sqliteType
       .replace(' NOT NULL', '')
       .replace(' PRIMARY KEY', '')
@@ -81,7 +95,10 @@ export const v = {
     })
   },
 
-  default<T>(inner: ColumnDescriptor, value: T): ColumnDescriptor {
+  default<T, TReferencedTable extends string | undefined>(
+    inner: ColumnDescriptor<TReferencedTable>,
+    value: T,
+  ): ColumnDescriptor<TReferencedTable> {
     return freeze({
       sqliteType: inner.sqliteType,
       tsType: inner.tsType,
@@ -98,9 +115,9 @@ export interface TableDefinitionOptions {
 }
 
 export interface TableDefinition<
-  TColumns extends Record<string, ColumnDescriptor> = Record<
+  TColumns extends Record<string, ColumnDescriptor<any>> = Record<
     string,
-    ColumnDescriptor
+    ColumnDescriptor<any>
   >,
 > {
   tableName: string
@@ -108,7 +125,7 @@ export interface TableDefinition<
   options: TableDefinitionOptions
 }
 
-export function defineTable<TColumns extends Record<string, ColumnDescriptor>>(
+export function defineTable<TColumns extends Record<string, ColumnDescriptor<any>>>(
   tableName: string,
   columns: TColumns,
   options: TableDefinitionOptions = {},

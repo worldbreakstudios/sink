@@ -17,7 +17,16 @@ export function emit(definitions: TableDefinition[]): string {
   )
   lines.push('')
   lines.push('function createId<TTableName extends string>(): Id<TTableName> {')
-  lines.push("  return globalThis.crypto.randomUUID() as Id<TTableName>")
+  lines.push('  const cryptoApi = globalThis.crypto')
+  lines.push('')
+  lines.push('  if (!cryptoApi?.getRandomValues) {')
+  lines.push("    throw new Error('crypto.getRandomValues() is not available in this environment.')")
+  lines.push('  }')
+  lines.push('')
+  lines.push('  const bytes = cryptoApi.getRandomValues(new Uint8Array(16))')
+  lines.push(
+    "  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('') as Id<TTableName>",
+  )
   lines.push('}')
   lines.push('')
 
@@ -76,6 +85,14 @@ export function emit(definitions: TableDefinition[]): string {
   // TableName union
   const tableNames = definitions.map((d) => `'${d.tableName}'`)
   lines.push(`export type TableName = ${tableNames.join(' | ')}`)
+  lines.push('')
+  lines.push("declare module '@sink/lib' {")
+  lines.push('  interface RegisteredSchemaTables {')
+  for (const def of definitions) {
+    lines.push(`    '${def.tableName}': true`)
+  }
+  lines.push('  }')
+  lines.push('}')
   lines.push('')
 
   // SchemaCollections interface
