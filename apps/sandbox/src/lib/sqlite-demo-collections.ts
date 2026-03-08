@@ -1,17 +1,23 @@
 import type { TransactionConfig } from '@tanstack/db'
 import { FrontendSqliteDatabase } from '@sink/lib'
-import type { SqliteCollection } from '@sink/lib'
-import { createAllTables, createBatchTransaction, createCollections } from '@/data/generated/schema.gen'
-import type { AnyRow, NotebookRow, NoteRow, TableName } from '@/data/generated/schema.gen'
+import {
+  createAllTables,
+  createBatchTransaction,
+  createCollections,
+} from '@/data/generated/schema.gen'
+import type {
+  AnyRow,
+  SchemaCollections,
+  TableName,
+} from '@/data/generated/schema.gen'
 
-export type { NotebookRow as NotebookRecord, NoteRow as NoteRecord }
+export type SqliteDemoRow = AnyRow
 export type SqliteDemoTableName = TableName
 export type SqliteInsertDraft = Record<string, string>
 
 export interface SqliteDemoCollectionsWorkspace {
   database: FrontendSqliteDatabase
-  notebooksCollection: SqliteCollection<NotebookRow, number>
-  notesCollection: SqliteCollection<NoteRow, number>
+  collections: SchemaCollections
   inspectTables: FrontendSqliteDatabase['inspectTables']
   createBatchTransaction: (
     config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
@@ -30,6 +36,18 @@ export interface SqliteDemoCollectionsWorkspace {
   ) => Promise<void>
   insertRow: (tableName: SqliteDemoTableName) => Promise<void>
   close: () => void
+}
+
+interface MutableSqliteDemoCollection {
+  insert: (row: AnyRow) => void
+  update: (key: number, callback: (draft: Record<string, unknown>) => void) => void
+}
+
+function getCollection(
+  collections: SchemaCollections,
+  tableName: SqliteDemoTableName,
+): MutableSqliteDemoCollection {
+  return collections[tableName] as unknown as MutableSqliteDemoCollection
 }
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
@@ -78,8 +96,7 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
 
   return {
     database,
-    notebooksCollection: collections.notebooks,
-    notesCollection: collections.notes,
+    collections,
     inspectTables: database.inspectTables.bind(database),
     createBatchTransaction: makeBatchTx,
     createInsertDraft(tableName) {
@@ -90,68 +107,36 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       )
     },
     queueInsert(tableName, draft, transaction) {
-      if (tableName === 'notebooks') {
-        const row = Object.fromEntries(
-          Object.entries(draft).map(([columnName, value]) => [
-            columnName,
-            database.coerceTableValue(tableName, columnName, value),
-          ]),
-        ) as unknown as NotebookRow
-
-        transaction.mutate(() => {
-          collections.notebooks.insert(row)
-        })
-
-        return
-      }
-
       const row = Object.fromEntries(
         Object.entries(draft).map(([columnName, value]) => [
           columnName,
           database.coerceTableValue(tableName, columnName, value),
         ]),
-      ) as unknown as NoteRow
+      ) as unknown as AnyRow
 
       transaction.mutate(() => {
-        collections.notes.insert(row)
+        getCollection(collections, tableName).insert(row)
       })
     },
     async updateCell(tableName, key, columnName, value) {
       const typedValue = database.coerceTableValue(tableName, columnName, value)
       const transaction = makeBatchTx()
 
-      if (tableName === 'notebooks') {
-        transaction.mutate(() => {
-          collections.notebooks.update(key, (draft) => {
-            ;(draft as Record<string, unknown>)[columnName] = typedValue
-          })
+      transaction.mutate(() => {
+        getCollection(collections, tableName).update(key, (draft) => {
+          draft[columnName] = typedValue
         })
-      } else {
-        transaction.mutate(() => {
-          collections.notes.update(key, (draft) => {
-            ;(draft as Record<string, unknown>)[columnName] = typedValue
-          })
-        })
-      }
+      })
 
       await transaction.isPersisted.promise
     },
     async insertRow(tableName) {
       const transaction = makeBatchTx()
+      const newRow = database.createInsertableRow(tableName) as unknown as AnyRow
 
-      if (tableName === 'notebooks') {
-        const newRow = database.createInsertableRow(tableName) as unknown as NotebookRow
-
-        transaction.mutate(() => {
-          collections.notebooks.insert(newRow)
-        })
-      } else {
-        const newRow = database.createInsertableRow(tableName) as unknown as NoteRow
-
-        transaction.mutate(() => {
-          collections.notes.insert(newRow)
-        })
-      }
+      transaction.mutate(() => {
+        getCollection(collections, tableName).insert(newRow)
+      })
 
       await transaction.isPersisted.promise
     },

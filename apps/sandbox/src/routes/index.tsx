@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import {
+  type SqliteCollection,
   type SqliteExplorerSnapshot,
 } from '@sink/lib'
 import { Button } from '@/components/ui/button'
@@ -33,9 +34,8 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import {
   createSqliteDemoCollectionsWorkspace,
-  type NoteRecord,
-  type NotebookRecord,
   type SqliteDemoCollectionsWorkspace,
+  type SqliteDemoRow,
   type SqliteDemoTableName,
   type SqliteInsertDraft,
 } from '@/lib/sqlite-demo-collections'
@@ -46,7 +46,6 @@ export const Route = createFileRoute('/')({
   component: App,
 })
 
-type DemoRow = NotebookRecord | NoteRecord
 type PendingInsertTransaction = ReturnType<
   SqliteDemoCollectionsWorkspace['createBatchTransaction']
 >
@@ -67,7 +66,7 @@ function formatCellValue(value: unknown): string {
   return String(value)
 }
 
-function getRowValue(row: DemoRow, columnName: string): unknown {
+function getRowValue(row: SqliteDemoRow, columnName: string): unknown {
   return (row as unknown as Record<string, unknown>)[columnName] ?? null
 }
 
@@ -95,12 +94,6 @@ function App() {
     draft: SqliteInsertDraft
     transaction: PendingInsertTransaction
   } | null>(null)
-
-  const notebooksQuery = useLiveQuery(
-    () => workspace?.notebooksCollection,
-    [workspace],
-  )
-  const notesQuery = useLiveQuery(() => workspace?.notesCollection, [workspace])
 
   const refreshSnapshot = useCallback(
     (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -142,17 +135,32 @@ function App() {
     }
   }, [workspace])
 
-  useEffect(() => {
-    if (workspace !== null) {
-      refreshSnapshot(workspace)
-    }
-  }, [workspace, notebooksQuery.data, notesQuery.data, refreshSnapshot])
-
   const tables = sqliteState.data?.tables ?? []
   const selectedTable = useMemo(
     () => tables.find((table) => table.name === selectedTableName) ?? tables[0],
     [selectedTableName, tables],
   )
+
+  const selectedCollection = useMemo(
+    () =>
+      workspace !== null && selectedTable !== undefined
+        ? (workspace.collections[
+            selectedTable.name as SqliteDemoTableName
+          ] as unknown as SqliteCollection<SqliteDemoRow, number>)
+        : undefined,
+    [selectedTable?.name, workspace],
+  )
+
+  const selectedRowsQuery = useLiveQuery(
+    () => selectedCollection,
+    [selectedCollection],
+  )
+
+  useEffect(() => {
+    if (workspace !== null) {
+      refreshSnapshot(workspace)
+    }
+  }, [refreshSnapshot, selectedRowsQuery.data, workspace])
 
   useEffect(() => {
     if (tables.length > 0 && !tables.some((table) => table.name === selectedTableName)) {
@@ -160,23 +168,15 @@ function App() {
     }
   }, [selectedTableName, tables])
 
-  const notebooksRows = notebooksQuery.data ?? []
-  const notesRows = notesQuery.data ?? []
-  const selectedRows = useMemo(() => {
-    if (selectedTable?.name === 'notes') {
-      return notesRows as DemoRow[]
-    }
-
-    return notebooksRows as DemoRow[]
-  }, [notebooksRows, notesRows, selectedTable?.name])
+  const selectedRows = (selectedRowsQuery.data ?? []) as SqliteDemoRow[]
 
   const columnNames = selectedTable?.columns.map((column) => column.name) ?? []
   const tableCounts = useMemo(
-    () => ({
-      notebooks: notebooksRows.length,
-      notes: notesRows.length,
-    }),
-    [notebooksRows.length, notesRows.length],
+    () =>
+      Object.fromEntries(
+        tables.map((table) => [table.name, table.rows.length]),
+      ) as Record<string, number>,
+    [tables],
   )
   const modalTable = useMemo(
     () => tables.find((table) => table.name === insertModal?.tableName),
