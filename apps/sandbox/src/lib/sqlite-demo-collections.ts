@@ -57,70 +57,7 @@ function getCollection(
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const db = await FrontendSqliteDatabase.createInMemory()
-  const inboxId = '7f4c2a9d1e8b6c3055d4f913a27be1c0'
-  const workspaceId = '2bd91f0a6c7e4d3fb185aa9246ce8f71'
-  const noteOneId = '94a7c31ef20d4b68a15f77c2de983ab4'
-  const noteTwoId = 'c18e5d72ab904f36be21d44a89f0c6d3'
-  const noteThreeId = '3ea96bf14cd82750a8d2e6719f43bc05'
-  const inboxCreatedAt = 1709748000000n
-  const workspaceCreatedAt = 1709748300000n
-  const noteOneCreatedAt = 1709748600001n
-  const noteTwoCreatedAt = 1709748720003n
-  const noteThreeCreatedAt = 1709748900002n
-
   createAllTables(db)
-
-  db.execute(
-    `
-      INSERT INTO notebooks (_id, _createdAt, _updatedAt, name, description)
-      VALUES
-        (?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?);
-    `,
-    [
-      inboxId,
-      inboxCreatedAt,
-      inboxCreatedAt,
-      'Inbox',
-      'Quick capture workspace',
-      workspaceId,
-      workspaceCreatedAt,
-      workspaceCreatedAt,
-      'Offline-first note store',
-      'Demo notebook seeded by the sandbox',
-    ],
-  )
-
-  db.execute(
-    `
-      INSERT INTO notes (_id, notebook_id, title, body, status, _createdAt)
-      VALUES
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?);
-    `,
-    [
-      noteOneId,
-      inboxId,
-      'Capture SQLite wrapper ideas',
-      'Start with schema inspection and query helpers.',
-      'open',
-      noteOneCreatedAt,
-      noteTwoId,
-      inboxId,
-      'Support migrations',
-      'Track schema changes in one place.',
-      'draft',
-      noteTwoCreatedAt,
-      noteThreeId,
-      workspaceId,
-      'Prototype table browser',
-      'Render schemas and row data in the sandbox.',
-      'open',
-      noteThreeCreatedAt,
-    ],
-  )
-
   return db
 }
 
