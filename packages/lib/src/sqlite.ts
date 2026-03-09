@@ -101,6 +101,50 @@ export class FrontendSqliteDatabase {
   }
 
   /**
+   * Creates a database persisted to IndexedDB.
+   * Supports much larger storage than localStorage (typically 50%+ of disk).
+   * Call `persistToIndexedDB()` to save changes.
+   */
+  static async createWithIndexedDB(filename: string) {
+    const sqlite = await loadSqlite()
+    const idbName = `sqlite-${filename}`
+
+    // Try to load existing database from IndexedDB
+    const existingData = await idbLoad(idbName)
+
+    let db: Database
+    if (existingData) {
+      // Load from existing data - sqlite-wasm accepts Uint8Array in constructor
+      // but types don't reflect this, so we use a type assertion
+      const DBConstructor = sqlite.oo1.DB as new (data: Uint8Array) => Database
+      db = new DBConstructor(existingData)
+    } else {
+      db = new sqlite.oo1.DB(':memory:', 'ct')
+    }
+
+    const instance = new FrontendSqliteDatabase(sqlite, db)
+    instance.#idbName = idbName
+
+    return instance
+  }
+
+  #idbName: string | null = null
+
+  /**
+   * Persists the current database state to IndexedDB.
+   * Only works for databases created with `createWithIndexedDB`.
+   */
+  async persistToIndexedDB(): Promise<void> {
+    if (!this.#idbName) {
+      throw new Error('This database was not created with IndexedDB persistence.')
+    }
+
+    // Export database as Uint8Array
+    const data = (this.#db as unknown as { export: () => Uint8Array }).export()
+    await idbSave(this.#idbName, data)
+  }
+
+  /**
    * Creates a database persisted to OPFS (Origin Private File System).
    * Requires cross-origin isolation headers (COOP/COEP).
    * Note: OPFS VFS can only be installed from the main thread but
@@ -441,5 +485,104 @@ function create128BitId(): string {
 
 function currentTimestamp(): bigint {
   return BigInt(Date.now())
+}
+
+const IDB_STORE_NAME = 'sqlite-data'
+
+interface IDBLike {
+  open(name: string, version?: number): IDBRequestLike
+}
+
+interface IDBRequestLike {
+  result: IDBDatabaseLike
+  error: Error | null
+  onerror: (() => void) | null
+  onsuccess: (() => void) | null
+  onupgradeneeded: (() => void) | null
+}
+
+interface IDBDatabaseLike {
+  objectStoreNames: { contains(name: string): boolean }
+  createObjectStore(name: string): unknown
+  transaction(name: string, mode: string): IDBTransactionLike
+  close(): void
+}
+
+interface IDBTransactionLike {
+  objectStore(name: string): IDBStoreLike
+}
+
+interface IDBStoreLike {
+  get(key: string): IDBRequestLike & { result: unknown }
+  put(value: unknown, key: string): IDBRequestLike
+}
+
+function getIndexedDB(): IDBLike {
+  const g = globalThis as Record<string, unknown>
+  const idb = g.indexedDB as IDBLike | undefined
+
+  if (!idb) {
+    throw new Error('IndexedDB is not available in this environment.')
+  }
+
+  return idb
+}
+
+function openIdb(idbName: string): Promise<IDBDatabaseLike> {
+  return new Promise((resolve, reject) => {
+    const idb = getIndexedDB()
+    const request = idb.open(idbName, 1)
+
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(IDB_STORE_NAME)) {
+        db.createObjectStore(IDB_STORE_NAME)
+      }
+    }
+  })
+}
+
+async function idbLoad(idbName: string): Promise<Uint8Array | null> {
+  const db = await openIdb(idbName)
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(IDB_STORE_NAME, 'readonly')
+    const store = transaction.objectStore(IDB_STORE_NAME)
+    const request = store.get('database')
+
+    request.onerror = () => {
+      db.close()
+      reject(request.error)
+    }
+
+    request.onsuccess = () => {
+      db.close()
+      const result = request.result
+      resolve(result instanceof Uint8Array ? result : null)
+    }
+  })
+}
+
+async function idbSave(idbName: string, data: Uint8Array): Promise<void> {
+  const db = await openIdb(idbName)
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(IDB_STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(IDB_STORE_NAME)
+    const request = store.put(data, 'database')
+
+    request.onerror = () => {
+      db.close()
+      reject(request.error)
+    }
+
+    request.onsuccess = () => {
+      db.close()
+      resolve()
+    }
+  })
 }
 
