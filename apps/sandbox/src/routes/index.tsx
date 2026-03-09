@@ -20,6 +20,7 @@ import {
   type InsertModalState,
   TableSchema,
   TableSidebar,
+  ThemeToggle,
 } from './sandbox'
 
 export const Route = createFileRoute('/')({
@@ -276,21 +277,24 @@ function App() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">SQLite Sandbox</h1>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setActionError(null)
-            setSqliteState({ status: 'loading' })
-            loadDemo().catch((error: unknown) => {
-              setSqliteState({
-                status: 'error',
-                error: error instanceof Error ? error.message : 'Unknown SQLite error',
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setActionError(null)
+              setSqliteState({ status: 'loading' })
+              loadDemo().catch((error: unknown) => {
+                setSqliteState({
+                  status: 'error',
+                  error: error instanceof Error ? error.message : 'Unknown SQLite error',
+                })
               })
-            })
-          }}
-        >
-          Reload demo database
-        </Button>
+            }}
+          >
+            Reload demo database
+          </Button>
+          <ThemeToggle />
+        </div>
       </div>
 
       {sqliteState.status === 'loading' && (

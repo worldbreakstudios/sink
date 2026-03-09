@@ -4,4 +4,5 @@ export { IndexedQueryPreview, type IndexedQueryPreviewData } from './indexed-que
 export { InsertRowModal, type InsertModalState } from './insert-row-modal'
 export { TableSchema } from './table-schema'
 export { TableSidebar } from './table-sidebar'
+export { ThemeToggle } from './theme-toggle'
 export * from './utils'
