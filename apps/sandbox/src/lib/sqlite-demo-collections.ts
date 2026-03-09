@@ -66,7 +66,11 @@ function getCollection(
 }
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
-  const db = await FrontendSqliteDatabase.createInMemory()
+  // Use localStorage persistence (~5MB limit, works on main thread)
+  // For OPFS persistence, SQLite must run in a Web Worker
+  const db = await FrontendSqliteDatabase.createWithLocalStorage(
+    'sqlite-demo-database',
+  )
   const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
   const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
   const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
@@ -185,7 +189,9 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
     createInsertDraft(tableName) {
       const row = database.createInsertableRow(tableName)
 
-      for (const [columnName, config] of Object.entries(REFERENCE_COLUMNS[tableName])) {
+      for (const [columnName, config] of Object.entries(
+        REFERENCE_COLUMNS[tableName],
+      )) {
         if (!config) {
           continue
         }

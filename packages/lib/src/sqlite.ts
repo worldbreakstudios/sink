@@ -54,6 +54,18 @@ async function loadSqlite(): Promise<Sqlite3Static> {
   return sqlitePromise
 }
 
+export function isOpfsSupported(): boolean {
+  const g = globalThis as Record<string, unknown>
+  const nav = g.navigator as Record<string, unknown> | undefined
+  const storage = nav?.storage as Record<string, unknown> | undefined
+
+  return (
+    'FileSystemHandle' in g &&
+    'FileSystemDirectoryHandle' in g &&
+    typeof storage?.getDirectory === 'function'
+  )
+}
+
 export class FrontendSqliteDatabase {
   readonly #sqlite: Sqlite3Static
   readonly #db: Database
@@ -68,6 +80,73 @@ export class FrontendSqliteDatabase {
     const db = new sqlite.oo1.DB(filename, 'ct')
 
     return new FrontendSqliteDatabase(sqlite, db)
+  }
+
+  /**
+   * Creates a database persisted to localStorage via JsStorageDb.
+   * Limited to ~5MB due to localStorage constraints.
+   * Works on main thread without special headers.
+   */
+  static async createWithLocalStorage(filename: string) {
+    const sqlite = await loadSqlite()
+    const JsStorageDb = (sqlite.oo1 as Record<string, unknown>)
+      .JsStorageDb as new (filename: string) => Database
+
+    if (!JsStorageDb) {
+      throw new Error('JsStorageDb is not available in this sqlite-wasm build.')
+    }
+
+    const db = new JsStorageDb(filename)
+    return new FrontendSqliteDatabase(sqlite, db)
+  }
+
+  /**
+   * Creates a database persisted to OPFS (Origin Private File System).
+   * Requires cross-origin isolation headers (COOP/COEP).
+   * Note: OPFS VFS can only be installed from the main thread but
+   * Atomics.wait() is blocked there, so this uses the async OPFS variant.
+   */
+  static async createWithOpfsVfs(filename: string) {
+    const sqlite = await loadSqlite()
+
+    if (!isOpfsSupported()) {
+      throw new Error(
+        'OPFS is not supported in this environment. Ensure COOP/COEP headers are set.',
+      )
+    }
+
+    // Install the OPFS VFS if not already installed
+    const installOpfs = (sqlite as Record<string, unknown>).installOpfsSAHPoolVfs as
+      | ((options?: { name?: string }) => Promise<unknown>)
+      | undefined
+
+    if (!installOpfs) {
+      throw new Error('OPFS VFS installer is not available in this sqlite-wasm build.')
+    }
+
+    try {
+      const poolUtil = (await installOpfs({ name: 'opfs-sahpool' })) as {
+        getVfs: () => { name: string }
+      }
+      const vfsName = poolUtil.getVfs().name
+      const db = new sqlite.oo1.DB(filename, 'ct', vfsName)
+      return new FrontendSqliteDatabase(sqlite, db)
+    } catch (error) {
+      // OPFS SAH Pool may fail on main thread, try regular OPFS
+      const installRegularOpfs = (sqlite as Record<string, unknown>).installOpfsVfs as
+        | (() => Promise<unknown>)
+        | undefined
+
+      if (!installRegularOpfs) {
+        throw new Error(
+          'OPFS VFS installation failed. OPFS requires running in a Web Worker for full support.',
+        )
+      }
+
+      await installRegularOpfs()
+      const db = new sqlite.oo1.DB(filename, 'ct', 'opfs')
+      return new FrontendSqliteDatabase(sqlite, db)
+    }
   }
 
   get version(): string {
