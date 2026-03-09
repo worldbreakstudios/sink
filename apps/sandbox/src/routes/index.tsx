@@ -29,7 +29,8 @@ export const Route = createFileRoute('/')({
 })
 
 function App() {
-  const [workspace, setWorkspace] = useState<SqliteDemoCollectionsWorkspace | null>(null)
+  const [workspace, setWorkspace] =
+    useState<SqliteDemoCollectionsWorkspace | null>(null)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
@@ -96,7 +97,10 @@ function App() {
     [selectedTable?.name, workspace],
   )
 
-  const selectedRowsQuery = useLiveQuery(() => selectedCollection, [selectedCollection])
+  const selectedRowsQuery = useLiveQuery(
+    () => selectedCollection,
+    [selectedCollection],
+  )
 
   useEffect(() => {
     if (workspace !== null) {
@@ -105,7 +109,10 @@ function App() {
   }, [refreshSnapshot, selectedRowsQuery.data, workspace])
 
   useEffect(() => {
-    if (tables.length > 0 && !tables.some((table) => table.name === selectedTableName)) {
+    if (
+      tables.length > 0 &&
+      !tables.some((table) => table.name === selectedTableName)
+    ) {
       setSelectedTableName(tables[0]?.name ?? '')
     }
   }, [selectedTableName, tables])
@@ -146,7 +153,9 @@ function App() {
           query: `fields.query().withIndex('by_object_id', (q) => q.eq('object_id', '${firstField.object_id}')).take(5)`,
           rows: workspace.collections.fields
             .query()
-            .withIndex('by_object_id', (q) => q.eq('object_id', firstField.object_id))
+            .withIndex('by_object_id', (q) =>
+              q.eq('object_id', firstField.object_id),
+            )
             .take(5),
         }
       }
@@ -154,7 +163,10 @@ function App() {
         return {
           title: 'by_name',
           query: `fieldTypes.query().withIndex('by_name').take(5)`,
-          rows: workspace.collections.fieldTypes.query().withIndex('by_name').take(5),
+          rows: workspace.collections.fieldTypes
+            .query()
+            .withIndex('by_name')
+            .take(5),
         }
       }
       case 'objects': {
@@ -166,7 +178,9 @@ function App() {
           query: `objects.query().withIndex('by_type_id', (q) => q.eq('type_id', '${firstObject.type_id}')).take(5)`,
           rows: workspace.collections.objects
             .query()
-            .withIndex('by_type_id', (q) => q.eq('type_id', firstObject.type_id))
+            .withIndex('by_type_id', (q) =>
+              q.eq('type_id', firstObject.type_id),
+            )
             .take(5),
         }
       }
@@ -174,7 +188,10 @@ function App() {
         return {
           title: 'by_name',
           query: `objectTypes.query().withIndex('by_name').take(5)`,
-          rows: workspace.collections.objectTypes.query().withIndex('by_name').take(5),
+          rows: workspace.collections.objectTypes
+            .query()
+            .withIndex('by_name')
+            .take(5),
         }
       }
       default:
@@ -197,7 +214,9 @@ function App() {
         setActionError(null)
       } catch (error) {
         setActionError(
-          error instanceof Error ? error.message : 'Unable to update SQLite cell.',
+          error instanceof Error
+            ? error.message
+            : 'Unable to update SQLite cell.',
         )
       }
     },
@@ -222,7 +241,11 @@ function App() {
     if (workspace === null || insertModal === null) return
 
     try {
-      workspace.queueInsert(insertModal.tableName, insertModal.draft, insertModal.transaction)
+      workspace.queueInsert(
+        insertModal.tableName,
+        insertModal.draft,
+        insertModal.transaction,
+      )
       await insertModal.transaction.commit()
       refreshSnapshot(workspace)
       setActionError(null)
@@ -275,7 +298,9 @@ function App() {
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">SQLite Sandbox</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">
+            SQLite Sandbox
+          </h1>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -286,7 +311,10 @@ function App() {
               loadDemo().catch((error: unknown) => {
                 setSqliteState({
                   status: 'error',
-                  error: error instanceof Error ? error.message : 'Unknown SQLite error',
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : 'Unknown SQLite error',
                 })
               })
             }}
@@ -317,7 +345,9 @@ function App() {
         <section className="space-y-4">
           {actionError && (
             <Card className="border-amber-300 bg-amber-50">
-              <CardContent className="p-4 text-sm text-amber-900">{actionError}</CardContent>
+              <CardContent className="p-4 text-sm text-amber-900">
+                {actionError}
+              </CardContent>
             </Card>
           )}
 
@@ -330,7 +360,10 @@ function App() {
                 sqliteVersion={sqliteState.data?.version}
                 onSelectTable={setSelectedTableName}
               />
-              <TableSchema schema={selectedTable.schema} indexes={selectedTableIndexes} />
+              <TableSchema
+                schema={selectedTable.schema}
+                indexes={selectedTableIndexes}
+              />
             </div>
           </Card>
 
