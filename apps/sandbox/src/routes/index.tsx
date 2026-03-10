@@ -15,7 +15,9 @@ import {
   DataTable,
   InsertRowModal,
   type InsertModalState,
-  QueryPanel,
+  parseValue,
+  type QueryResult,
+  type QueryState,
   RightSidebar,
   TableSidebar,
   ThemeToggle,
@@ -39,7 +41,7 @@ function App() {
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
-  const [queryPanelOpen, setQueryPanelOpen] = useState(false)
+  const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -118,6 +120,11 @@ function App() {
       setSelectedTableName(tables[0]?.name ?? '')
     }
   }, [selectedTableName, tables])
+
+  // Clear query result when table changes
+  useEffect(() => {
+    setQueryResult(null)
+  }, [selectedTableName])
 
   // Load indexes for selected table
   useEffect(() => {
@@ -244,6 +251,62 @@ function App() {
       ? 'secondary'
       : 'outline'
 
+  const handleRunQuery = useCallback(async (query: QueryState) => {
+    if (!workspace || !selectedTable) return
+
+    const startTime = performance.now()
+
+    try {
+      const collection = workspace.collections[selectedTable.name as SqliteDemoTableName] as unknown as SqliteCollection<SqliteDemoRow, SqliteDemoId>
+
+      // Build the query dynamically
+      let q = collection.query().withIndex(query.indexName, (builder: any) => {
+        let b = builder
+        for (const c of query.constraints) {
+          const value = parseValue(c.value)
+          b = b[c.operator](c.field, value)
+        }
+        return b
+      })
+
+      q = q.order(query.orderDirection)
+
+      let rows: SqliteDemoRow[]
+      switch (query.queryMethod) {
+        case 'first': {
+          const row = await q.first()
+          rows = row ? [row] : []
+          break
+        }
+        case 'unique': {
+          const row = await q.unique()
+          rows = row ? [row] : []
+          break
+        }
+        case 'take':
+          rows = await q.take(parseInt(query.takeCount) || 10)
+          break
+        case 'collect':
+        default:
+          rows = await q.collect()
+          break
+      }
+
+      const executionTime = performance.now() - startTime
+
+      setQueryResult({
+        rows,
+        executionTime,
+      })
+    } catch (err) {
+      setQueryResult({
+        rows: [],
+        executionTime: 0,
+        error: err instanceof Error ? err.message : 'Query failed',
+      })
+    }
+  }, [workspace, selectedTable])
+
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -339,24 +402,17 @@ function App() {
             onSelectTable={setSelectedTableName}
           />
 
-          {/* Center - Data Table + Query Panel */}
-          <div className="flex min-w-0 flex-1 flex-col">
-            <DataTable
-              tableName={selectedTable.name}
-              columns={selectedTable.columns}
-              rows={selectedRows}
-              onCellEdit={handleCellEdit}
-              onAddRow={handleAddRow}
-              onToggleQuery={() => setQueryPanelOpen((open) => !open)}
-              queryPanelOpen={queryPanelOpen}
-            />
-            {queryPanelOpen && (
-              <QueryPanel
-                collections={workspace?.collections ?? null}
-                tableName={selectedTable.name}
-              />
-            )}
-          </div>
+          {/* Center - Data Table */}
+          <DataTable
+            tableName={selectedTable.name}
+            columns={selectedTable.columns}
+            rows={selectedRows}
+            collections={workspace?.collections ?? null}
+            queryResult={queryResult}
+            onCellEdit={handleCellEdit}
+            onAddRow={handleAddRow}
+            onRunQuery={handleRunQuery}
+          />
 
           {/* Right Sidebar - Schema/Indexes */}
           <RightSidebar
