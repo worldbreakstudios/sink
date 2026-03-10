@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import type { SqliteCollection, SqliteIndexDefinition } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/ui/code-block'
@@ -6,6 +6,12 @@ import { Input } from '@/components/ui/input'
 import type { SchemaCollections, TableName } from '@/data/generated/schema.gen'
 import { INDEXES } from '@/data/generated/schema.gen'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import { cn } from '@/lib/utils'
+
+const DEFAULT_HEIGHT = 300
+const MIN_HEIGHT = 150
+const MAX_HEIGHT = 600
+const STORAGE_KEY = 'sandbox-query-panel-height'
 
 type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
 
@@ -36,6 +42,50 @@ export function QueryPanel({
   const [result, setResult] = useState<QueryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
+  const [height, setHeight] = useState(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) return Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, parseInt(stored, 10)))
+    } catch {}
+    return DEFAULT_HEIGHT
+  })
+  const [resizing, setResizing] = useState<{ startY: number; startHeight: number } | null>(null)
+
+  // Handle resize
+  useEffect(() => {
+    if (!resizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Dragging up decreases Y, which should increase height
+      const delta = resizing.startY - e.clientY
+      const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, resizing.startHeight + delta))
+      setHeight(newHeight)
+    }
+
+    const handleMouseUp = () => {
+      setResizing(null)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [resizing])
+
+  // Persist height
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, String(height))
+    } catch {}
+  }, [height])
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setResizing({ startY: e.clientY, startHeight: height })
+  }, [height])
 
   // Get indexes for current table
   const tableIndexes = useMemo(() => {
@@ -154,9 +204,17 @@ export function QueryPanel({
   }, [])
 
   return (
-    <div className="flex flex-col border-t">
+    <div className="flex flex-col border-t" style={{ height }}>
+      {/* Resize Handle */}
+      <div
+        onMouseDown={handleResizeStart}
+        className={cn(
+          'h-1 cursor-ns-resize bg-border transition-colors hover:bg-primary/40',
+          resizing && 'bg-primary/50',
+        )}
+      />
       {/* Query Builder */}
-      <div className="flex gap-4 border-b bg-muted/30 p-4">
+      <div className="flex min-h-0 flex-1 gap-4 overflow-auto border-b bg-muted/30 p-4">
         {/* Left: Query config */}
         <div className="flex flex-1 flex-col gap-3">
           {/* Index Selection */}
@@ -279,16 +337,16 @@ export function QueryPanel({
 
       {/* Error Display */}
       {error && (
-        <div className="border-b border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+        <div className="shrink-0 border-b border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
           <span className="font-medium">Error:</span> {error}
         </div>
       )}
 
       {/* Results */}
       {result && (
-        <div className="flex flex-col">
+        <div className="flex min-h-0 flex-1 flex-col">
           {/* Results Header */}
-          <div className="flex items-center gap-3 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          <div className="flex shrink-0 items-center gap-3 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
             <span>
               {result.rowCount} {result.rowCount === 1 ? 'row' : 'rows'}
             </span>
@@ -298,7 +356,7 @@ export function QueryPanel({
 
           {/* Results Table */}
           {result.rows.length > 0 && result.rows[0] ? (
-            <div className="max-h-48 overflow-auto">
+            <div className="min-h-0 flex-1 overflow-auto">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
                   <tr>
