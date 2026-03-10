@@ -91,12 +91,16 @@ export function DataTable({
   rows,
   onCellEdit,
   onAddRow,
+  onToggleQuery,
+  queryPanelOpen,
 }: {
   tableName: string
   columns: SqliteTableColumn[]
   rows: SqliteDemoRow[]
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
+  onToggleQuery?: () => void
+  queryPanelOpen?: boolean
 }) {
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
@@ -243,24 +247,51 @@ export function DataTable({
             {rows.length} {rows.length === 1 ? 'document' : 'documents'}
           </span>
         </div>
-        <Button size="sm" onClick={() => { setEditingCell(null); onAddRow() }}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="mr-1"
-          >
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-          </svg>
-          Add
-        </Button>
+        <div className="flex items-center gap-2">
+          {onToggleQuery && (
+            <Button
+              variant={queryPanelOpen ? 'secondary' : 'outline'}
+              size="sm"
+              onClick={onToggleQuery}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1"
+              >
+                <path d="m18 16 4-4-4-4" />
+                <path d="m6 8-4 4 4 4" />
+                <path d="m14.5 4-5 16" />
+              </svg>
+              Query
+            </Button>
+          )}
+          <Button size="sm" onClick={() => { setEditingCell(null); onAddRow() }}>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mr-1"
+            >
+              <path d="M5 12h14" />
+              <path d="M12 5v14" />
+            </svg>
+            Add
+          </Button>
+        </div>
       </div>
 
       {/* Table Content */}

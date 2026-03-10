@@ -9,7 +9,8 @@
       "Bash(pnpm tsc --noEmit -p packages/cli-client/tsconfig.json)",
       "Bash(pnpm sink generate)",
       "Bash(pnpm build)",
-      "Bash(pnpm --filter sandbox typecheck)"
+      "Bash(pnpm --filter sandbox typecheck)",
+      "Bash(pnpm tsc --noEmit -p apps/sandbox)"
     ]
   }
 }

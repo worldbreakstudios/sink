@@ -15,6 +15,7 @@ import {
   DataTable,
   InsertRowModal,
   type InsertModalState,
+  QueryPanel,
   RightSidebar,
   TableSidebar,
   ThemeToggle,
@@ -38,6 +39,7 @@ function App() {
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
+  const [queryPanelOpen, setQueryPanelOpen] = useState(false)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -337,14 +339,24 @@ function App() {
             onSelectTable={setSelectedTableName}
           />
 
-          {/* Center - Data Table */}
-          <DataTable
-            tableName={selectedTable.name}
-            columns={selectedTable.columns}
-            rows={selectedRows}
-            onCellEdit={handleCellEdit}
-            onAddRow={handleAddRow}
-          />
+          {/* Center - Data Table + Query Panel */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <DataTable
+              tableName={selectedTable.name}
+              columns={selectedTable.columns}
+              rows={selectedRows}
+              onCellEdit={handleCellEdit}
+              onAddRow={handleAddRow}
+              onToggleQuery={() => setQueryPanelOpen((open) => !open)}
+              queryPanelOpen={queryPanelOpen}
+            />
+            {queryPanelOpen && (
+              <QueryPanel
+                collections={workspace?.collections ?? null}
+                tableName={selectedTable.name}
+              />
+            )}
+          </div>
 
           {/* Right Sidebar - Schema/Indexes */}
           <RightSidebar
