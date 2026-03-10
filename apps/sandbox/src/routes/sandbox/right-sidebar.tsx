@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { SqliteIndexSnapshot } from '@sink/lib'
 import { CodeBlock } from '@/components/ui/code-block'
 import { getSchemaSource } from '@/data/schema-sources'
 import { cn } from '@/lib/utils'
 
 type TabType = 'schema' | 'indexes'
+
+const MIN_WIDTH = 200
+const MAX_WIDTH = 600
+const DEFAULT_WIDTH = 320
 
 export function RightSidebar({
   tableName,
@@ -18,12 +22,56 @@ export function RightSidebar({
   onClose: () => void
 }) {
   const [activeTab, setActiveTab] = useState<TabType>('schema')
+  const [width, setWidth] = useState(DEFAULT_WIDTH)
+  const [isResizing, setIsResizing] = useState(false)
+  const sidebarRef = useRef<HTMLElement>(null)
   const schemaSource = getSchemaSource(tableName)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizing(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!sidebarRef.current) return
+      const containerRight = window.innerWidth
+      const newWidth = containerRight - e.clientX
+      setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, newWidth)))
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing])
 
   if (!isOpen) return null
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-l bg-background">
+    <aside
+      ref={sidebarRef}
+      style={{ width }}
+      className="relative flex shrink-0 flex-col border-l bg-background"
+    >
+      {/* Resize Handle */}
+      <div
+        onMouseDown={handleMouseDown}
+        className={cn(
+          'absolute left-0 top-0 bottom-0 w-1 cursor-col-resize transition-colors',
+          'hover:bg-primary/20',
+          isResizing && 'bg-primary/30',
+        )}
+      />
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-medium">
