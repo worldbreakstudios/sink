@@ -259,7 +259,7 @@ export function CreateTableModal({
 
         <div className="flex gap-6 min-h-0 flex-1 overflow-hidden">
           {/* Left: Form */}
-          <div className="flex-1 overflow-auto space-y-4 pr-2">
+          <div className="flex-1 overflow-auto space-y-4 p-0.5 -m-0.5">
             {/* Table Name */}
             <div className="space-y-2">
               <Label htmlFor="table-name">Table Name</Label>
