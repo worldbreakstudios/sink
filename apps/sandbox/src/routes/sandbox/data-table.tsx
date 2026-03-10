@@ -17,6 +17,32 @@ import { formatCellValue, getRowValue, isMultilineColumn } from './utils'
 
 const DEFAULT_COLUMN_WIDTH = 150
 const MIN_COLUMN_WIDTH = 50
+const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
+
+interface TableLayout {
+  columnWidths: Record<string, number>
+  columnOrder: string[]
+}
+
+function loadTableLayout(tableName: string): TableLayout | null {
+  try {
+    const stored = localStorage.getItem(`${STORAGE_KEY_PREFIX}${tableName}`)
+    if (stored) {
+      return JSON.parse(stored) as TableLayout
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null
+}
+
+function saveTableLayout(tableName: string, layout: TableLayout): void {
+  try {
+    localStorage.setItem(`${STORAGE_KEY_PREFIX}${tableName}`, JSON.stringify(layout))
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function DataTable({
   tableName,
@@ -38,13 +64,41 @@ export function DataTable({
   } | null>(null)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [resizing, setResizing] = useState<{ columnName: string; startX: number; startWidth: number } | null>(null)
+  const [columnOrder, setColumnOrder] = useState<string[]>([])
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null)
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
 
-  const columnNames = columns.map((column) => column.name)
+  const defaultColumnNames = useMemo(() => columns.map((column) => column.name), [columns])
 
-  // Reset column widths when table changes
+  // Use custom order if set, otherwise use default
+  const columnNames = useMemo(() => {
+    if (columnOrder.length === 0) return defaultColumnNames
+    // Filter to only include columns that still exist
+    const validOrder = columnOrder.filter((name) => defaultColumnNames.includes(name))
+    // Add any new columns that aren't in the order
+    const newColumns = defaultColumnNames.filter((name) => !validOrder.includes(name))
+    return [...validOrder, ...newColumns]
+  }, [columnOrder, defaultColumnNames])
+
+  // Load saved layout when table changes
   useEffect(() => {
-    setColumnWidths({})
+    const saved = loadTableLayout(tableName)
+    if (saved) {
+      setColumnWidths(saved.columnWidths)
+      setColumnOrder(saved.columnOrder)
+    } else {
+      setColumnWidths({})
+      setColumnOrder([])
+    }
   }, [tableName])
+
+  // Save layout when widths or order change
+  useEffect(() => {
+    // Only save if there's something to save
+    if (Object.keys(columnWidths).length > 0 || columnOrder.length > 0) {
+      saveTableLayout(tableName, { columnWidths, columnOrder })
+    }
+  }, [tableName, columnWidths, columnOrder])
 
   // Handle column resize
   useEffect(() => {
@@ -74,6 +128,51 @@ export function DataTable({
     const currentWidth = columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH
     setResizing({ columnName, startX: e.clientX, startWidth: currentWidth })
   }, [columnWidths])
+
+  const handleDragStart = useCallback((e: React.DragEvent, columnName: string) => {
+    setDraggedColumn(columnName)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', columnName)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent, columnName: string) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverColumn(columnName)
+  }, [])
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverColumn(null)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent, targetColumn: string) => {
+    e.preventDefault()
+    const sourceColumn = e.dataTransfer.getData('text/plain')
+
+    if (sourceColumn && sourceColumn !== targetColumn) {
+      setColumnOrder((prevOrder) => {
+        const currentOrder = prevOrder.length > 0 ? prevOrder : columnNames
+        const newOrder = [...currentOrder]
+        const sourceIndex = newOrder.indexOf(sourceColumn)
+        const targetIndex = newOrder.indexOf(targetColumn)
+
+        if (sourceIndex !== -1 && targetIndex !== -1) {
+          newOrder.splice(sourceIndex, 1)
+          newOrder.splice(targetIndex, 0, sourceColumn)
+        }
+
+        return newOrder
+      })
+    }
+
+    setDraggedColumn(null)
+    setDragOverColumn(null)
+  }, [columnNames])
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedColumn(null)
+    setDragOverColumn(null)
+  }, [])
 
   const readOnlyColumns = useMemo(
     () =>
@@ -130,14 +229,24 @@ export function DataTable({
             No rows in this table.
           </div>
         ) : (
-          <Table style={{ tableLayout: 'fixed' }}>
+          <Table className="w-max">
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {columnNames.map((columnName) => (
                   <TableHead
                     key={columnName}
-                    className="relative whitespace-nowrap"
-                    style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, columnName)}
+                    onDragOver={(e) => handleDragOver(e, columnName)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, columnName)}
+                    onDragEnd={handleDragEnd}
+                    className={cn(
+                      'relative cursor-grab whitespace-nowrap active:cursor-grabbing',
+                      dragOverColumn === columnName && draggedColumn !== columnName && 'bg-primary/10',
+                      draggedColumn === columnName && 'opacity-50',
+                    )}
+                    style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH, minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
                   >
                     {columnName}
                     {/* Resize handle */}
@@ -163,7 +272,7 @@ export function DataTable({
                       <TableCell
                         key={`${tableName}-${rowId}-${columnName}`}
                         className="truncate font-mono text-xs"
-                        style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
+                        style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH, minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
                       >
                         {editingCell?.rowId === rowId &&
                         editingCell.columnName === columnName ? (
