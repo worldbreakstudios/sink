@@ -128,3 +128,16 @@ pre code {
   width: min(1200px, calc(100% - 2rem));
   margin-inline: auto;
 }
+
+/* Shiki dual theme support */
+.shiki,
+.shiki span {
+  color: var(--shiki-light, inherit);
+  background-color: var(--shiki-light-bg, inherit);
+}
+
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark, inherit);
+  background-color: var(--shiki-dark-bg, inherit);
+}

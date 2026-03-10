@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { SqliteIndexSnapshot } from '@sink/lib'
+import { CodeBlock } from '@/components/ui/code-block'
 import { getSchemaSource } from '@/data/schema-sources'
 import { cn } from '@/lib/utils'
 
@@ -98,9 +99,7 @@ function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableN
       <p className="text-xs text-muted-foreground">
         Schema definition from <code className="rounded bg-muted px-1">{tableName}.schema.ts</code>
       </p>
-      <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-        <code>{schemaSource.trim()}</code>
-      </pre>
+      <CodeBlock code={schemaSource.trim()} language="typescript" />
     </div>
   )
 }
