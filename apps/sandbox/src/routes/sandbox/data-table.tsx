@@ -4,6 +4,13 @@ import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/ui/code-block'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -603,35 +610,40 @@ export function DataTable({
                 {/* Index Selection */}
                 <div className="flex items-center gap-2">
                   <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Index</label>
-                  <select
+                  <Select
                     value={selectedIndex}
-                    onChange={(e) => {
-                      setSelectedIndex(e.target.value)
+                    onValueChange={(value) => {
+                      setSelectedIndex(value === '_default' ? '' : value)
                       setConstraints([])
                       setQueryMethod('collect')
                     }}
-                    className="h-8 flex-1 rounded-md border bg-background px-2 text-sm"
                   >
-                    <option value="">By creation time (default)</option>
-                    {indexNames.map((name) => (
-                      <option key={name} value={name}>
-                        {name} ({tableIndexes[name]?.fields.join(', ')})
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-8 flex-1 text-sm">
+                      <SelectValue placeholder="By creation time (default)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_default">By creation time (default)</SelectItem>
+                      {indexNames.map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name} ({tableIndexes[name]?.fields.join(', ')})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Order Direction */}
                 <div className="flex items-center gap-2">
                   <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Order</label>
-                  <select
-                    value={orderDirection}
-                    onChange={(e) => setOrderDirection(e.target.value as 'asc' | 'desc')}
-                    className="h-8 rounded-md border bg-background px-2 text-sm"
-                  >
-                    <option value="asc">Ascending</option>
-                    <option value="desc">Descending</option>
-                  </select>
+                  <Select value={orderDirection} onValueChange={(value) => setOrderDirection(value as 'asc' | 'desc')}>
+                    <SelectTrigger className="h-8 w-32 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="asc">Ascending</SelectItem>
+                      <SelectItem value="desc">Descending</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Constraints */}
@@ -664,26 +676,28 @@ export function DataTable({
                     </div>
                     {constraints.map((constraint, i) => (
                       <div key={i} className="ml-[72px] flex items-center gap-2">
-                        <select
-                          value={constraint.field}
-                          onChange={(e) => updateConstraint(i, { field: e.target.value })}
-                          className="h-7 rounded-md border bg-background px-2 text-xs"
-                        >
-                          {indexFields.map((field) => (
-                            <option key={field} value={field}>{field}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={constraint.operator}
-                          onChange={(e) => updateConstraint(i, { operator: e.target.value as Operator })}
-                          className="h-7 w-16 rounded-md border bg-background px-2 text-xs"
-                        >
-                          <option value="eq">=</option>
-                          <option value="gt">&gt;</option>
-                          <option value="gte">&gt;=</option>
-                          <option value="lt">&lt;</option>
-                          <option value="lte">&lt;=</option>
-                        </select>
+                        <Select value={constraint.field} onValueChange={(value) => updateConstraint(i, { field: value })}>
+                          <SelectTrigger size="sm" className="h-7 w-28 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {indexFields.map((field) => (
+                              <SelectItem key={field} value={field}>{field}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
+                          <SelectTrigger size="sm" className="h-7 w-16 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="eq">=</SelectItem>
+                            <SelectItem value="gt">&gt;</SelectItem>
+                            <SelectItem value="gte">&gt;=</SelectItem>
+                            <SelectItem value="lt">&lt;</SelectItem>
+                            <SelectItem value="lte">&lt;=</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <Input
                           value={constraint.value}
                           onChange={(e) => updateConstraint(i, { value: e.target.value })}
@@ -710,16 +724,17 @@ export function DataTable({
                 {selectedIndex && (
                   <div className="flex items-center gap-2">
                     <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Return</label>
-                    <select
-                      value={queryMethod}
-                      onChange={(e) => setQueryMethod(e.target.value as QueryMethod)}
-                      className="h-8 rounded-md border bg-background px-2 text-sm"
-                    >
-                      <option value="collect">All rows</option>
-                      <option value="first">First row</option>
-                      {isUniqueIndex && <option value="unique">Exact match</option>}
-                      <option value="take">First n rows</option>
-                    </select>
+                    <Select value={queryMethod} onValueChange={(value) => setQueryMethod(value as QueryMethod)}>
+                      <SelectTrigger size="sm" className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="collect">All rows</SelectItem>
+                        <SelectItem value="first">First row</SelectItem>
+                        {isUniqueIndex && <SelectItem value="unique">Exact match</SelectItem>}
+                        <SelectItem value="take">First n rows</SelectItem>
+                      </SelectContent>
+                    </Select>
                     {queryMethod === 'take' && (
                       <Input
                         type="number"

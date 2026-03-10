@@ -10,7 +10,10 @@
       "Bash(pnpm sink generate)",
       "Bash(pnpm build)",
       "Bash(pnpm --filter sandbox typecheck)",
-      "Bash(pnpm tsc --noEmit -p apps/sandbox)"
+      "Bash(pnpm tsc --noEmit -p apps/sandbox)",
+      "Bash(pnpm dlx shadcn@latest add checkbox --yes)",
+      "Bash(pnpm --filter sandbox tsc --noEmit)",
+      "Bash(npx tsc --noEmit)"
     ]
   }
 }

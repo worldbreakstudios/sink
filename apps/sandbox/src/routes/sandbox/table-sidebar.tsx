@@ -27,10 +27,12 @@ export function TableSidebar({
   tables,
   selectedTableName,
   onSelectTable,
+  onCreateTable,
 }: {
   tables: SqliteTableSnapshot[]
   selectedTableName: string
   onSelectTable: (tableName: string) => void
+  onCreateTable: () => void
 }) {
   return (
     <aside className="flex w-52 flex-col border-r bg-muted/30">
@@ -76,9 +78,7 @@ export function TableSidebar({
         <button
           type="button"
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={() => {
-            // TODO: Implement create table functionality
-          }}
+          onClick={onCreateTable}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

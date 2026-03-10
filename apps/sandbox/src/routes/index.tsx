@@ -12,6 +12,7 @@ import {
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
 import {
+  CreateTableModal,
   DataTable,
   InsertRowModal,
   type InsertModalState,
@@ -42,6 +43,7 @@ function App() {
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
+  const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -400,6 +402,7 @@ function App() {
             tables={tables}
             selectedTableName={selectedTable.name}
             onSelectTable={setSelectedTableName}
+            onCreateTable={() => setCreateTableModalOpen(true)}
           />
 
           {/* Center - Data Table */}
@@ -431,6 +434,11 @@ function App() {
         onClose={handleInsertClose}
         onSubmit={handleInsertSubmit}
         onDraftChange={handleDraftChange}
+      />
+
+      <CreateTableModal
+        open={createTableModalOpen}
+        onClose={() => setCreateTableModalOpen(false)}
       />
     </div>
   )
