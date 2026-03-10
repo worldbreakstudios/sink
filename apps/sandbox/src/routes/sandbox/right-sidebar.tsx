@@ -188,12 +188,12 @@ function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
           <div className="space-y-3">
             {regularIndexes.map((index) => (
               <div key={index.name} className="rounded-md border bg-card p-3">
-                <div className="mb-1 font-mono text-sm">{index.name}</div>
+                <div className="mb-1 break-all font-mono text-sm">{index.name}</div>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium">Fields:</span>{' '}
                   {index.fields.join(', ') || '(none)'}
                 </div>
-                {index.unique && (
+                {!!index.unique && (
                   <div className="mt-1">
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
                       unique
