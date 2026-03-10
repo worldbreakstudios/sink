@@ -1,28 +1,28 @@
 import { useState } from 'react'
 import type { SqliteIndexSnapshot } from '@sink/lib'
+import { getSchemaSource } from '@/data/schema-sources'
 import { cn } from '@/lib/utils'
 
 type TabType = 'schema' | 'indexes'
 
 export function RightSidebar({
   tableName,
-  schema,
   indexes,
   isOpen,
   onClose,
 }: {
   tableName: string
-  schema: string
   indexes: SqliteIndexSnapshot[]
   isOpen: boolean
   onClose: () => void
 }) {
   const [activeTab, setActiveTab] = useState<TabType>('schema')
+  const schemaSource = getSchemaSource(tableName)
 
   if (!isOpen) return null
 
   return (
-    <aside className="flex w-80 flex-col border-l bg-background">
+    <aside className="flex w-80 shrink-0 flex-col border-l bg-background">
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-medium">
@@ -83,7 +83,7 @@ export function RightSidebar({
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
         {activeTab === 'schema' ? (
-          <SchemaPanel schema={schema} />
+          <SchemaPanel schemaSource={schemaSource} tableName={tableName} />
         ) : (
           <IndexesPanel indexes={indexes} />
         )}
@@ -92,14 +92,14 @@ export function RightSidebar({
   )
 }
 
-function SchemaPanel({ schema }: { schema: string }) {
+function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableName: string }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        This is the SQLite CREATE TABLE statement for this table.
+        Schema definition from <code className="rounded bg-muted px-1">{tableName}.schema.ts</code>
       </p>
-      <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-        <code>{schema}</code>
+      <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+        <code>{schemaSource.trim()}</code>
       </pre>
     </div>
   )
