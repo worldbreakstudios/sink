@@ -152,6 +152,44 @@ function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableN
   )
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }, [text])
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={cn(
+        'ml-2 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100',
+        'hover:bg-muted hover:text-foreground',
+        copied && 'text-green-600 dark:text-green-400',
+      )}
+      aria-label="Copy index name"
+    >
+      {copied ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
   const regularIndexes = indexes.filter((idx) => !idx.name.startsWith('sqlite_'))
 
@@ -187,8 +225,11 @@ function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
         ) : (
           <div className="space-y-3">
             {regularIndexes.map((index) => (
-              <div key={index.name} className="rounded-md border bg-card p-3">
-                <div className="mb-1 break-all font-mono text-sm">{index.name}</div>
+              <div key={index.name} className="group rounded-md border bg-card p-3">
+                <div className="mb-1 flex items-start justify-between gap-1">
+                  <span className="break-all font-mono text-sm">{index.name}</span>
+                  <CopyButton text={index.name} />
+                </div>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium">Fields:</span>{' '}
                   {index.fields.join(', ') || '(none)'}
