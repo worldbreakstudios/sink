@@ -229,7 +229,7 @@ export function DataTable({
             No rows in this table.
           </div>
         ) : (
-          <Table className="w-max">
+          <Table className="w-full min-w-max">
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {columnNames.map((columnName) => (
@@ -246,7 +246,10 @@ export function DataTable({
                       dragOverColumn === columnName && draggedColumn !== columnName && 'bg-primary/10',
                       draggedColumn === columnName && 'opacity-50',
                     )}
-                    style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH, minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
+                    style={{
+                      width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                      minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
+                    }}
                   >
                     {columnName}
                     {/* Resize handle */}
@@ -271,8 +274,12 @@ export function DataTable({
                     {columnNames.map((columnName) => (
                       <TableCell
                         key={`${tableName}-${rowId}-${columnName}`}
-                        className="truncate font-mono text-xs"
-                        style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH, minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
+                        className="font-mono text-xs"
+                        style={{
+                          width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                          minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
+                          maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                        }}
                       >
                         {editingCell?.rowId === rowId &&
                         editingCell.columnName === columnName ? (
@@ -319,7 +326,7 @@ export function DataTable({
                             />
                           )
                         ) : readOnlyColumns.has(columnName) ? (
-                          <span className="text-muted-foreground">
+                          <span className="block truncate text-muted-foreground">
                             {formatCellValue(getRowValue(row, columnName))}
                           </span>
                         ) : (
@@ -332,7 +339,7 @@ export function DataTable({
                                 value: formatCellValue(getRowValue(row, columnName)),
                               })
                             }
-                            className="w-full text-left hover:text-primary"
+                            className="block w-full truncate text-left hover:text-primary"
                           >
                             {formatCellValue(getRowValue(row, columnName))}
                           </button>
