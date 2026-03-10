@@ -12,8 +12,12 @@ const DEFAULT_HEIGHT = 300
 const MIN_HEIGHT = 150
 const MAX_HEIGHT = 600
 const STORAGE_KEY = 'sandbox-query-panel-height'
+const HISTORY_STORAGE_KEY = 'sandbox-query-history'
+const MAX_HISTORY_ITEMS = 50
 
 type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
+type Tab = 'builder' | 'history'
+type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
 
 interface Constraint {
   field: string
@@ -28,6 +32,32 @@ interface QueryResult {
   generatedCode: string
 }
 
+interface HistoryEntry {
+  id: string
+  tableName: string
+  indexName: string
+  constraints: Constraint[]
+  orderDirection: 'asc' | 'desc'
+  queryMethod: QueryMethod
+  takeCount: string
+  generatedCode: string
+  timestamp: number
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const stored = localStorage.getItem(HISTORY_STORAGE_KEY)
+    if (stored) return JSON.parse(stored) as HistoryEntry[]
+  } catch {}
+  return []
+}
+
+function saveHistory(history: HistoryEntry[]): void {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, MAX_HISTORY_ITEMS)))
+  } catch {}
+}
+
 export function QueryPanel({
   collections,
   tableName,
@@ -38,7 +68,8 @@ export function QueryPanel({
   const [selectedIndex, setSelectedIndex] = useState<string>('')
   const [constraints, setConstraints] = useState<Constraint[]>([])
   const [orderDirection, setOrderDirection] = useState<'asc' | 'desc'>('asc')
-  const [limit, setLimit] = useState<string>('')
+  const [queryMethod, setQueryMethod] = useState<QueryMethod>('collect')
+  const [takeCount, setTakeCount] = useState<string>('10')
   const [result, setResult] = useState<QueryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
@@ -50,6 +81,8 @@ export function QueryPanel({
     return DEFAULT_HEIGHT
   })
   const [resizing, setResizing] = useState<{ startY: number; startHeight: number } | null>(null)
+  const [activeTab, setActiveTab] = useState<Tab>('builder')
+  const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
 
   // Handle resize
   useEffect(() => {
@@ -102,6 +135,32 @@ export function QueryPanel({
     return [...tableIndexes[selectedIndex].fields]
   }, [selectedIndex, tableIndexes])
 
+  // Check if selected index is unique
+  const isUniqueIndex = useMemo(() => {
+    if (!selectedIndex || !tableIndexes[selectedIndex]) return false
+    return !!tableIndexes[selectedIndex].unique
+  }, [selectedIndex, tableIndexes])
+
+  // When unique mode is selected, auto-populate all index fields as eq constraints
+  useEffect(() => {
+    if (queryMethod === 'unique' && indexFields.length > 0) {
+      // Create eq constraints for all fields in the index
+      const uniqueConstraints: Constraint[] = indexFields.map((field) => ({
+        field,
+        operator: 'eq' as Operator,
+        value: constraints.find((c) => c.field === field)?.value ?? '',
+      }))
+      setConstraints(uniqueConstraints)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryMethod, indexFields]) // intentionally not including constraints to avoid loop
+
+  // Check if unique query is valid (all fields have values)
+  const isUniqueQueryValid = useMemo(() => {
+    if (queryMethod !== 'unique') return true
+    return constraints.length === indexFields.length && constraints.every((c) => c.value.trim() !== '')
+  }, [queryMethod, constraints, indexFields])
+
   // Generate the TypeScript code
   const generatedCode = useMemo(() => {
     if (!selectedIndex) return `// Select an index to build a query`
@@ -120,14 +179,24 @@ export function QueryPanel({
 
     code += `\n  .order('${orderDirection}')`
 
-    if (limit && parseInt(limit) > 0) {
-      code += `\n  .take(${limit})`
-    } else {
-      code += `\n  .collect()`
+    switch (queryMethod) {
+      case 'first':
+        code += `\n  .first()`
+        break
+      case 'unique':
+        code += `\n  .unique()`
+        break
+      case 'take':
+        code += `\n  .take(${takeCount || '10'})`
+        break
+      case 'collect':
+      default:
+        code += `\n  .collect()`
+        break
     }
 
     return code
-  }, [tableName, selectedIndex, constraints, orderDirection, limit])
+  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount])
 
   const handleRun = useCallback(async () => {
     if (!collections || !selectedIndex) return
@@ -154,10 +223,24 @@ export function QueryPanel({
       query = query.order(orderDirection)
 
       let rows: SqliteDemoRow[]
-      if (limit && parseInt(limit) > 0) {
-        rows = await query.take(parseInt(limit))
-      } else {
-        rows = await query.collect()
+      switch (queryMethod) {
+        case 'first': {
+          const row = await query.first()
+          rows = row ? [row] : []
+          break
+        }
+        case 'unique': {
+          const row = await query.unique()
+          rows = row ? [row] : []
+          break
+        }
+        case 'take':
+          rows = await query.take(parseInt(takeCount) || 10)
+          break
+        case 'collect':
+        default:
+          rows = await query.collect()
+          break
       }
 
       const executionTime = performance.now() - startTime
@@ -168,12 +251,30 @@ export function QueryPanel({
         executionTime,
         generatedCode,
       })
+
+      // Add to history
+      const entry: HistoryEntry = {
+        id: crypto.randomUUID(),
+        tableName,
+        indexName: selectedIndex,
+        constraints: [...constraints],
+        orderDirection,
+        queryMethod,
+        takeCount,
+        generatedCode,
+        timestamp: Date.now(),
+      }
+      setHistory((prev) => {
+        const updated = [entry, ...prev].slice(0, MAX_HISTORY_ITEMS)
+        saveHistory(updated)
+        return updated
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Query failed')
     } finally {
       setIsRunning(false)
     }
-  }, [collections, tableName, selectedIndex, constraints, orderDirection, limit, generatedCode])
+  }, [collections, tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount, generatedCode])
 
   const addConstraint = useCallback(() => {
     const firstField = indexFields[0]
@@ -198,9 +299,34 @@ export function QueryPanel({
     setSelectedIndex('')
     setConstraints([])
     setOrderDirection('asc')
-    setLimit('')
+    setQueryMethod('collect')
+    setTakeCount('10')
     setResult(null)
     setError(null)
+  }, [])
+
+  const restoreFromHistory = useCallback((entry: HistoryEntry) => {
+    setSelectedIndex(entry.indexName)
+    setConstraints(entry.constraints)
+    setOrderDirection(entry.orderDirection)
+    setQueryMethod(entry.queryMethod)
+    setTakeCount(entry.takeCount)
+    setResult(null)
+    setError(null)
+    setActiveTab('builder')
+  }, [])
+
+  const removeFromHistory = useCallback((id: string) => {
+    setHistory((prev) => {
+      const updated = prev.filter((e) => e.id !== id)
+      saveHistory(updated)
+      return updated
+    })
+  }, [])
+
+  const clearHistory = useCallback(() => {
+    setHistory([])
+    saveHistory([])
   }, [])
 
   return (
@@ -213,137 +339,268 @@ export function QueryPanel({
           resizing && 'bg-primary/50',
         )}
       />
-      {/* Query Builder */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-auto border-b bg-muted/30 p-4">
-        {/* Left: Query config */}
-        <div className="flex flex-1 flex-col gap-3">
-          {/* Index Selection */}
-          <div className="flex items-center gap-2">
-            <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Index</label>
-            <select
-              value={selectedIndex}
-              onChange={(e) => {
-                setSelectedIndex(e.target.value)
-                setConstraints([])
-              }}
-              className="h-8 flex-1 rounded-md border bg-background px-2 text-sm"
-            >
-              <option value="">Select an index...</option>
-              {indexNames.map((name) => (
-                <option key={name} value={name}>
-                  {name} ({tableIndexes[name]?.fields.join(', ')})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Constraints */}
-          {selectedIndex && (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Where</label>
-                <Button variant="outline" size="sm" onClick={addConstraint} className="h-7 text-xs">
-                  + Add constraint
-                </Button>
-              </div>
-              {constraints.map((constraint, i) => (
-                <div key={i} className="ml-[72px] flex items-center gap-2">
-                  <select
-                    value={constraint.field}
-                    onChange={(e) => updateConstraint(i, { field: e.target.value })}
-                    className="h-7 rounded-md border bg-background px-2 text-xs"
-                  >
-                    {indexFields.map((field) => (
-                      <option key={field} value={field}>{field}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={constraint.operator}
-                    onChange={(e) => updateConstraint(i, { operator: e.target.value as Operator })}
-                    className="h-7 w-20 rounded-md border bg-background px-2 text-xs"
-                  >
-                    <option value="eq">=</option>
-                    <option value="gt">&gt;</option>
-                    <option value="gte">&gt;=</option>
-                    <option value="lt">&lt;</option>
-                    <option value="lte">&lt;=</option>
-                  </select>
-                  <Input
-                    value={constraint.value}
-                    onChange={(e) => updateConstraint(i, { value: e.target.value })}
-                    placeholder="value"
-                    className="h-7 flex-1 text-xs"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeConstraint(i)}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                  </Button>
-                </div>
-              ))}
-            </div>
+      {/* Tabs */}
+      <div className="flex shrink-0 gap-1 border-b bg-muted/30 px-4">
+        <button
+          type="button"
+          onClick={() => setActiveTab('builder')}
+          className={cn(
+            'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+            activeTab === 'builder'
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
           )}
-
-          {/* Order & Limit */}
-          {selectedIndex && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Order</label>
-                <select
-                  value={orderDirection}
-                  onChange={(e) => setOrderDirection(e.target.value as 'asc' | 'desc')}
-                  className="h-8 rounded-md border bg-background px-2 text-sm"
-                >
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-muted-foreground">Limit</label>
-                <Input
-                  type="number"
-                  value={limit}
-                  onChange={(e) => setLimit(e.target.value)}
-                  placeholder="all"
-                  className="h-8 w-20 text-sm"
-                />
-              </div>
-            </div>
+        >
+          Builder
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('history')}
+          className={cn(
+            'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+            activeTab === 'history'
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
           )}
-        </div>
-
-        {/* Right: Generated code preview */}
-        <div className="flex w-80 flex-col gap-2">
-          <div className="text-xs font-medium text-muted-foreground">Generated Code</div>
-          <div className="flex-1 overflow-auto">
-            <CodeBlock code={generatedCode} language="typescript" />
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={handleRun} disabled={isRunning || !collections || !selectedIndex} size="sm" className="flex-1">
-              {isRunning ? 'Running...' : 'Run Query'}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleClear}>
-              Clear
-            </Button>
-          </div>
-        </div>
+        >
+          History {history.length > 0 && `(${history.length})`}
+        </button>
       </div>
 
-      {/* Error Display */}
-      {error && (
+      {/* Builder Tab */}
+      {activeTab === 'builder' && (
+        <div className="flex min-h-0 flex-1 gap-4 overflow-auto border-b bg-muted/30 p-4">
+          {/* Left: Query config */}
+          <div className="flex flex-1 flex-col gap-3">
+            {/* Index Selection */}
+            <div className="flex items-center gap-2">
+              <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Index</label>
+              <select
+                value={selectedIndex}
+                onChange={(e) => {
+                  setSelectedIndex(e.target.value)
+                  setConstraints([])
+                }}
+                className="h-8 flex-1 rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="">Select an index...</option>
+                {indexNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name} ({tableIndexes[name]?.fields.join(', ')})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Constraints */}
+            {selectedIndex && queryMethod === 'unique' ? (
+              // Unique mode: show all fields with locked eq operator
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Match</label>
+                  <span className="text-xs text-muted-foreground">Fill all fields for exact match</span>
+                </div>
+                {indexFields.map((field, i) => (
+                  <div key={field} className="ml-[72px] flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-xs font-medium">{field}</span>
+                    <span className="text-xs text-muted-foreground">=</span>
+                    <Input
+                      value={constraints[i]?.value ?? ''}
+                      onChange={(e) => updateConstraint(i, { value: e.target.value })}
+                      placeholder={`Enter ${field}`}
+                      className="h-7 flex-1 text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : selectedIndex && (
+              // Normal mode: flexible constraints
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Where</label>
+                  <Button variant="outline" size="sm" onClick={addConstraint} className="h-7 text-xs">
+                    + Add constraint
+                  </Button>
+                </div>
+                {constraints.map((constraint, i) => (
+                  <div key={i} className="ml-[72px] flex items-center gap-2">
+                    <select
+                      value={constraint.field}
+                      onChange={(e) => updateConstraint(i, { field: e.target.value })}
+                      className="h-7 rounded-md border bg-background px-2 text-xs"
+                    >
+                      {indexFields.map((field) => (
+                        <option key={field} value={field}>{field}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={constraint.operator}
+                      onChange={(e) => updateConstraint(i, { operator: e.target.value as Operator })}
+                      className="h-7 w-20 rounded-md border bg-background px-2 text-xs"
+                    >
+                      <option value="eq">=</option>
+                      <option value="gt">&gt;</option>
+                      <option value="gte">&gt;=</option>
+                      <option value="lt">&lt;</option>
+                      <option value="lte">&lt;=</option>
+                    </select>
+                    <Input
+                      value={constraint.value}
+                      onChange={(e) => updateConstraint(i, { value: e.target.value })}
+                      placeholder="value"
+                      className="h-7 flex-1 text-xs"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeConstraint(i)}
+                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6 6 18" />
+                        <path d="m6 6 12 12" />
+                      </svg>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Order & Method */}
+            {selectedIndex && (
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">Order</label>
+                  <select
+                    value={orderDirection}
+                    onChange={(e) => setOrderDirection(e.target.value as 'asc' | 'desc')}
+                    className="h-8 rounded-md border bg-background px-2 text-sm"
+                  >
+                    <option value="asc">Ascending</option>
+                    <option value="desc">Descending</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-muted-foreground">Return</label>
+                  <select
+                    value={queryMethod}
+                    onChange={(e) => setQueryMethod(e.target.value as QueryMethod)}
+                    className="h-8 rounded-md border bg-background px-2 text-sm"
+                  >
+                    <option value="collect">.collect() - all rows</option>
+                    <option value="first">.first() - first row</option>
+                    {isUniqueIndex && <option value="unique">.unique() - exact match</option>}
+                    <option value="take">.take(n) - first n rows</option>
+                  </select>
+                  {queryMethod === 'take' && (
+                    <Input
+                      type="number"
+                      value={takeCount}
+                      onChange={(e) => setTakeCount(e.target.value)}
+                      placeholder="10"
+                      className="h-8 w-16 text-sm"
+                      min="1"
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right: Generated code preview */}
+          <div className="flex w-80 flex-col gap-2">
+            <div className="text-xs font-medium text-muted-foreground">Generated Code</div>
+            <div className="flex-1 overflow-auto">
+              <CodeBlock code={generatedCode} language="typescript" />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                onClick={handleRun}
+                disabled={isRunning || !collections || !selectedIndex || !isUniqueQueryValid}
+                size="sm"
+                className="flex-1"
+              >
+                {isRunning ? 'Running...' : queryMethod === 'unique' && !isUniqueQueryValid ? 'Fill all fields' : 'Run Query'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleClear}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* History Tab */}
+      {activeTab === 'history' && (
+        <div className="flex min-h-0 flex-1 flex-col border-b bg-muted/30">
+          {history.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              No query history yet. Run a query to see it here.
+            </div>
+          ) : (
+            <>
+              <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
+                <span className="text-xs text-muted-foreground">{history.length} queries</span>
+                <Button variant="ghost" size="sm" onClick={clearHistory} className="h-6 text-xs text-muted-foreground hover:text-destructive">
+                  Clear all
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {history.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="group flex cursor-pointer items-start gap-3 border-b px-4 py-3 hover:bg-muted/50"
+                    onClick={() => restoreFromHistory(entry)}
+                  >
+                    <div className="flex-1 overflow-hidden">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium">{entry.tableName}</span>
+                        <span className="text-xs text-muted-foreground">·</span>
+                        <span className="text-xs text-muted-foreground">{entry.indexName}</span>
+                        {entry.tableName !== tableName && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                            different table
+                          </span>
+                        )}
+                      </div>
+                      <pre className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                        {entry.generatedCode.split('\n').slice(0, 2).join(' ')}...
+                      </pre>
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        {formatTimestamp(entry.timestamp)}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeFromHistory(entry.id)
+                      }}
+                      className="h-6 w-6 shrink-0 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6 6 18" />
+                        <path d="m6 6 12 12" />
+                      </svg>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Error Display (builder tab only) */}
+      {activeTab === 'builder' && error && (
         <div className="shrink-0 border-b border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
           <span className="font-medium">Error:</span> {error}
         </div>
       )}
 
-      {/* Results */}
-      {result && (
+      {/* Results (builder tab only) */}
+      {activeTab === 'builder' && result && (
         <div className="flex min-h-0 flex-1 flex-col">
           {/* Results Header */}
           <div className="flex shrink-0 items-center gap-3 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
@@ -427,4 +684,20 @@ function parseValue(value: string): unknown {
     return num
   }
   return value
+}
+
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp)
+  const now = new Date()
+  const diffMs = now.getTime() - timestamp
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays < 7) return `${diffDays}d ago`
+
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
