@@ -1,45 +1,102 @@
 import type { SqliteTableSnapshot } from '@sink/lib'
-import { Button } from '@/components/ui/button'
-import { CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+
+function TableIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 3v18" />
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M3 15h18" />
+    </svg>
+  )
+}
 
 export function TableSidebar({
   tables,
   selectedTableName,
-  tableCounts,
-  sqliteVersion,
   onSelectTable,
 }: {
   tables: SqliteTableSnapshot[]
   selectedTableName: string
-  tableCounts: Record<string, number>
-  sqliteVersion: string | undefined
   onSelectTable: (tableName: string) => void
 }) {
   return (
-    <aside className="border-b md:border-b-0 md:border-r">
-      <CardHeader className="border-b p-4">
-        <CardTitle className="text-base">Tables</CardTitle>
-        <CardDescription>SQLite {sqliteVersion}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-1 p-2">
-        {tables.map((table) => (
-          <Button
-            key={table.name}
-            variant={table.name === selectedTableName ? 'secondary' : 'ghost'}
-            className={cn(
-              'w-full justify-between',
-              table.name === selectedTableName && 'font-semibold',
-            )}
-            onClick={() => onSelectTable(table.name)}
+    <aside className="flex w-52 flex-col border-r bg-muted/30">
+      {/* Header */}
+      <div className="border-b px-3 py-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Tables
+        </h2>
+      </div>
+
+      {/* Table List */}
+      <nav className="flex-1 overflow-auto p-2">
+        <ul className="space-y-0.5">
+          {tables.map((table) => (
+            <li key={table.name}>
+              <button
+                type="button"
+                onClick={() => onSelectTable(table.name)}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                  table.name === selectedTableName
+                    ? 'bg-primary/10 font-medium text-primary'
+                    : 'text-foreground hover:bg-muted',
+                )}
+              >
+                <TableIcon
+                  className={cn(
+                    'shrink-0',
+                    table.name === selectedTableName
+                      ? 'text-primary'
+                      : 'text-muted-foreground',
+                  )}
+                />
+                <span className="truncate">{table.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      {/* Footer */}
+      <div className="border-t p-2">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={() => {
+            // TODO: Implement create table functionality
+          }}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            <span>{table.name}</span>
-            <span className="text-xs text-muted-foreground">
-              {tableCounts[table.name] ?? 0}
-            </span>
-          </Button>
-        ))}
-      </CardContent>
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </svg>
+          <span>Create Table</span>
+        </button>
+      </div>
     </aside>
   )
 }

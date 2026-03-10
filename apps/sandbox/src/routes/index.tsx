@@ -4,7 +4,6 @@ import { useLiveQuery } from '@tanstack/react-db'
 import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot } from '@sink/lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import {
   createSqliteDemoCollectionsWorkspace,
   type SqliteDemoCollectionsWorkspace,
@@ -13,13 +12,10 @@ import {
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
 import {
-  CollectionCounter,
   DataTable,
-  IndexedQueryPreview,
-  type IndexedQueryPreviewData,
   InsertRowModal,
   type InsertModalState,
-  TableSchema,
+  RightSidebar,
   TableSidebar,
   ThemeToggle,
 } from './sandbox'
@@ -40,9 +36,8 @@ function App() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string>('')
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
-  const [tableCounts, setTableCounts] = useState<Record<string, number>>({})
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
-  const [indexedQueryPreview, setIndexedQueryPreview] = useState<IndexedQueryPreviewData | null>(null)
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -137,105 +132,11 @@ function App() {
       })
   }, [selectedTable, workspace])
 
-  useEffect(() => {
-    if (workspace === null || selectedTable === undefined) {
-      setIndexedQueryPreview(null)
-      return
-    }
-
-    const loadPreview = async () => {
-      switch (selectedTable.name as SqliteDemoTableName) {
-        case 'fields': {
-          const allFields = await workspace.collections.fields.utils.readAll()
-          const firstField = allFields[0]
-          if (!firstField) {
-            setIndexedQueryPreview(null)
-            return
-          }
-
-          const rows = await workspace.collections.fields
-            .query()
-            .withIndex('by_object_id', (q) =>
-              q.eq('object_id', firstField.object_id),
-            )
-            .take(5)
-
-          setIndexedQueryPreview({
-            title: 'by_object_id',
-            query: `fields.query().withIndex('by_object_id', (q) => q.eq('object_id', '${firstField.object_id}')).take(5)`,
-            rows,
-          })
-          break
-        }
-        case 'fieldTypes': {
-          const rows = await workspace.collections.fieldTypes
-            .query()
-            .withIndex('by_name')
-            .take(5)
-
-          setIndexedQueryPreview({
-            title: 'by_name',
-            query: `fieldTypes.query().withIndex('by_name').take(5)`,
-            rows,
-          })
-          break
-        }
-        case 'objects': {
-          const allObjects = await workspace.collections.objects.utils.readAll()
-          const firstObject = allObjects[0]
-          if (!firstObject) {
-            setIndexedQueryPreview(null)
-            return
-          }
-
-          const rows = await workspace.collections.objects
-            .query()
-            .withIndex('by_type_id', (q) =>
-              q.eq('type_id', firstObject.type_id),
-            )
-            .take(5)
-
-          setIndexedQueryPreview({
-            title: 'by_type_id',
-            query: `objects.query().withIndex('by_type_id', (q) => q.eq('type_id', '${firstObject.type_id}')).take(5)`,
-            rows,
-          })
-          break
-        }
-        case 'objectTypes': {
-          const rows = await workspace.collections.objectTypes
-            .query()
-            .withIndex('by_name')
-            .take(5)
-
-          setIndexedQueryPreview({
-            title: 'by_name',
-            query: `objectTypes.query().withIndex('by_name').take(5)`,
-            rows,
-          })
-          break
-        }
-        default:
-          setIndexedQueryPreview(null)
-      }
-    }
-
-    loadPreview().catch((error) => {
-      console.error('Failed to load indexed query preview:', error)
-      setIndexedQueryPreview(null)
-    })
-  }, [selectedTable, workspace])
-
   const modalTable = useMemo(
     () => tables.find((table) => table.name === insertModal?.tableName),
     [insertModal?.tableName, tables],
   )
 
-  const updateTableCount = useCallback((tableName: string, count: number) => {
-    setTableCounts((prev) =>
-      prev[tableName] === count ? prev : { ...prev, [tableName]: count },
-    )
-  }, [])
 
   const handleCellEdit = useCallback(
     async (rowId: SqliteDemoId, columnName: string, value: string) => {
@@ -341,105 +242,102 @@ function App() {
       ? 'secondary'
       : 'outline'
 
-  return (
-    <main className="page-wrap py-8">
-      {workspace !== null &&
-        tables.map((table) => (
-          <CollectionCounter
-            key={table.name}
-            tableName={table.name}
-            collection={
-              workspace.collections[
-                table.name as SqliteDemoTableName
-              ] as SqliteCollection<SqliteDemoRow, SqliteDemoId>
-            }
-            onCount={updateTableCount}
-          />
-        ))}
 
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+  return (
+    <div className="flex h-screen flex-col bg-background">
+      {/* Top Header Bar */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">
-            SQLite Sandbox
-          </h1>
+          <h1 className="text-sm font-semibold">SQLite Sandbox</h1>
           {workspace && (
             <Badge variant={persistenceBadgeVariant} className="text-xs">
               {workspace.persistenceType.toUpperCase()}
             </Badge>
           )}
+          {sqliteState.data?.version && (
+            <span className="text-xs text-muted-foreground">
+              SQLite {sqliteState.data.version}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          {!rightSidebarOpen && selectedTable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setRightSidebarOpen(true)}
+              className="text-xs"
+            >
+              Show Schema
+            </Button>
+          )}
           <Button
-            variant="outline"
+            variant="ghost"
+            size="sm"
             onClick={() => {
               setActionError(null)
               setSqliteState({ status: 'loading' })
               loadDemo().catch((error: unknown) => {
                 setSqliteState({
                   status: 'error',
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : 'Unknown SQLite error',
+                  error: error instanceof Error ? error.message : 'Unknown SQLite error',
                 })
               })
             }}
           >
-            Reload demo database
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mr-1"
+            >
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+              <path d="M16 21h5v-5" />
+            </svg>
+            Reload
           </Button>
           <ThemeToggle />
         </div>
-      </div>
+      </header>
 
+      {/* Error Banner */}
+      {actionError && (
+        <div className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          {actionError}
+        </div>
+      )}
+
+      {/* Main Content */}
       {sqliteState.status === 'loading' && (
-        <Card>
-          <CardContent className="p-6 text-sm text-muted-foreground">
-            Loading SQLite collections...
-          </CardContent>
-        </Card>
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          Loading SQLite collections...
+        </div>
       )}
 
       {sqliteState.status === 'error' && (
-        <Card className="border-destructive/40 bg-destructive/5">
-          <CardContent className="p-6 text-sm text-destructive">
-            {sqliteState.error}
-          </CardContent>
-        </Card>
+        <div className="flex flex-1 items-center justify-center text-sm text-destructive">
+          {sqliteState.error}
+        </div>
       )}
 
       {sqliteState.status === 'ready' && selectedTable && (
-        <section className="space-y-4">
-          {actionError && (
-            <Card className="border-amber-300 bg-amber-50">
-              <CardContent className="p-4 text-sm text-amber-900">
-                {actionError}
-              </CardContent>
-            </Card>
-          )}
+        <div className="flex min-h-0 flex-1">
+          {/* Left Sidebar - Tables */}
+          <TableSidebar
+            tables={tables}
+            selectedTableName={selectedTable.name}
+            onSelectTable={setSelectedTableName}
+          />
 
-          <Card className="overflow-hidden">
-            <div className="grid md:grid-cols-[240px_minmax(0,1fr)]">
-              <TableSidebar
-                tables={tables}
-                selectedTableName={selectedTable.name}
-                tableCounts={tableCounts}
-                sqliteVersion={sqliteState.data?.version}
-                onSelectTable={setSelectedTableName}
-              />
-              <TableSchema
-                schema={selectedTable.schema}
-                indexes={selectedTableIndexes}
-              />
-            </div>
-          </Card>
-
-          {indexedQueryPreview && (
-            <IndexedQueryPreview
-              preview={indexedQueryPreview}
-              tableName={selectedTable.name}
-            />
-          )}
-
+          {/* Center - Data Table */}
           <DataTable
             tableName={selectedTable.name}
             columns={selectedTable.columns}
@@ -447,7 +345,16 @@ function App() {
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
           />
-        </section>
+
+          {/* Right Sidebar - Schema/Indexes */}
+          <RightSidebar
+            tableName={selectedTable.name}
+            schema={selectedTable.schema}
+            indexes={selectedTableIndexes}
+            isOpen={rightSidebarOpen}
+            onClose={() => setRightSidebarOpen(false)}
+          />
+        </div>
       )}
 
       <InsertRowModal
@@ -458,6 +365,6 @@ function App() {
         onSubmit={handleInsertSubmit}
         onDraftChange={handleDraftChange}
       />
-    </main>
+    </div>
   )
 }

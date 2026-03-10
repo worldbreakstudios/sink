@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
 import type { SqliteTableColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Table,
@@ -55,33 +54,49 @@ export function DataTable({
   )
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0">
-        <div>
-          <CardTitle className="text-base">Rows</CardTitle>
-          <CardDescription>
-            Click a cell to edit it. New rows are inserted through a modal-backed transaction.
-          </CardDescription>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {/* Table Header */}
+      <div className="flex items-center justify-between border-b bg-background px-4 py-3">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold">{tableName}</h1>
+          <span className="text-sm text-muted-foreground">
+            {rows.length} {rows.length === 1 ? 'document' : 'documents'}
+          </span>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setEditingCell(null)
-            onAddRow()
-          }}
-        >
-          Add row
+        <Button size="sm" onClick={() => { setEditingCell(null); onAddRow() }}>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="mr-1"
+          >
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </svg>
+          Add
         </Button>
-      </CardHeader>
-      <CardContent>
+      </div>
+
+      {/* Table Content */}
+      <div className="flex-1 overflow-auto">
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No rows in this table.</p>
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            No rows in this table.
+          </div>
         ) : (
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {columnNames.map((columnName) => (
-                  <TableHead key={columnName}>{columnName}</TableHead>
+                  <TableHead key={columnName} className="whitespace-nowrap">
+                    {columnName}
+                  </TableHead>
                 ))}
               </TableRow>
             </TableHeader>
@@ -90,9 +105,12 @@ export function DataTable({
                 const rowId = row._id
 
                 return (
-                  <TableRow key={`${tableName}-${rowId}`}>
+                  <TableRow key={`${tableName}-${rowId}`} className="group">
                     {columnNames.map((columnName) => (
-                      <TableCell key={`${tableName}-${rowId}-${columnName}`}>
+                      <TableCell
+                        key={`${tableName}-${rowId}-${columnName}`}
+                        className="max-w-xs truncate font-mono text-xs"
+                      >
                         {editingCell?.rowId === rowId &&
                         editingCell.columnName === columnName ? (
                           isMultilineColumn(columnName) ? (
@@ -134,10 +152,11 @@ export function DataTable({
                                   setEditingCell(null)
                                 }
                               }}
+                              className="h-7 text-xs"
                             />
                           )
                         ) : readOnlyColumns.has(columnName) ? (
-                          <span className="block w-full text-left text-sm">
+                          <span className="text-muted-foreground">
                             {formatCellValue(getRowValue(row, columnName))}
                           </span>
                         ) : (
@@ -150,7 +169,7 @@ export function DataTable({
                                 value: formatCellValue(getRowValue(row, columnName)),
                               })
                             }
-                            className="w-full text-left text-sm"
+                            className="w-full text-left hover:text-primary"
                           >
                             {formatCellValue(getRowValue(row, columnName))}
                           </button>
@@ -163,7 +182,7 @@ export function DataTable({
             </TableBody>
           </Table>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }
