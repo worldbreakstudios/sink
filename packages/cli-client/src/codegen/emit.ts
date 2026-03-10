@@ -8,7 +8,7 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push("import type { TransactionConfig } from '@tanstack/db'")
   lines.push("import { createTransaction } from '@tanstack/db'")
   lines.push(
-    "import type { FrontendSqliteDatabase, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
+    "import type { AsyncSqliteDatabase, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
   )
   lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
@@ -94,13 +94,13 @@ export function emit(definitions: TableDefinition[]): string {
 
   // createAllTables function
   lines.push(
-    'export function createAllTables(db: FrontendSqliteDatabase): void {',
+    'export async function createAllTables(db: AsyncSqliteDatabase): Promise<void> {',
   )
   lines.push('  for (const sql of SQL_CREATE_ALL) {')
-  lines.push('    db.execute(sql)')
+  lines.push('    await db.execute(sql)')
   lines.push('  }')
   lines.push('  for (const sql of SQL_CREATE_INDEXES) {')
-  lines.push('    db.execute(sql)')
+  lines.push('    await db.execute(sql)')
   lines.push('  }')
   lines.push('}')
   lines.push('')
@@ -169,13 +169,13 @@ export function emit(definitions: TableDefinition[]): string {
 
   // createCollections function
   lines.push(
-    'export function createCollections(db: FrontendSqliteDatabase): SchemaCollections {',
+    'export async function createCollections(db: AsyncSqliteDatabase): Promise<SchemaCollections> {',
   )
   lines.push('  return {')
   for (const def of definitions) {
     const orderBy = def.options.orderBy
     lines.push(
-      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
+      `    ${def.tableName}: await createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
     )
     lines.push(`      id: 'sqlite-${def.tableName}',`)
     lines.push(`      tableName: '${def.tableName}',`)

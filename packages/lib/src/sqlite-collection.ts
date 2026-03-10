@@ -8,7 +8,7 @@ import {
   type TransactionConfig,
 } from '@tanstack/db'
 import type { LocalOnlyCollectionUtils } from '@tanstack/db'
-import { FrontendSqliteDatabase } from './sqlite'
+import type { AsyncSqliteDatabase } from './sqlite'
 
 export interface CreateSqliteCollectionOptions<
   TRow extends object,
@@ -19,7 +19,7 @@ export interface CreateSqliteCollectionOptions<
   tableName: string
   keyColumn: keyof TRow & string
   getKey: (row: TRow) => TKey
-  database: FrontendSqliteDatabase
+  database: AsyncSqliteDatabase
   orderBy?: string
   referenceColumns?: Partial<Record<keyof TRow & string, SqliteReferenceColumn>>
   indexes?: TIndexes
@@ -41,7 +41,7 @@ export type SqliteIndexMap = Record<string, SqliteIndexDefinition<readonly strin
 
 export interface SqliteCollectionUtils<TRow extends object>
   extends LocalOnlyCollectionUtils {
-  readAll(): TRow[]
+  readAll(): Promise<TRow[]>
   persistMutations(transaction: { mutations: Array<PendingMutation<any>> }): Promise<void>
   createSqliteTransaction(
     config?: Omit<TransactionConfig<TRow>, 'mutationFn'>,
@@ -140,23 +140,30 @@ export interface SqliteQueryInitializer<
 
 export interface SqliteIndexedQuery<TRow extends object> {
   order(direction: 'asc' | 'desc'): SqliteIndexedQuery<TRow>
-  collect(): TRow[]
-  first(): TRow | null
-  unique(): TRow | null
-  take(limit: number): TRow[]
+  collect(): Promise<TRow[]>
+  first(): Promise<TRow | null>
+  unique(): Promise<TRow | null>
+  take(limit: number): Promise<TRow[]>
 }
 
-export function createSqliteCollection<
+export async function createSqliteCollection<
   TRow extends object,
   TKey extends string | number,
   TIndexes extends SqliteIndexMap = Record<string, never>,
 >(
   options: CreateSqliteCollectionOptions<TRow, TKey, TIndexes>,
-): SqliteCollection<TRow, TKey, TIndexes> {
+): Promise<SqliteCollection<TRow, TKey, TIndexes>> {
+  // Load initial data asynchronously
+  const initialData = await readAllRows<TRow>(options.database, options.tableName, options.orderBy)
+
+  // Cache table columns for system fields (avoid repeated async calls)
+  const tableColumns = await options.database.getTableColumns(options.tableName)
+  const columnNames = new Set(tableColumns.map((column) => column.name))
+
   const baseOptions = localOnlyCollectionOptions<TRow, TKey>({
     id: options.id,
     getKey: options.getKey,
-    initialData: readAllRows(options.database, options.tableName, options.orderBy),
+    initialData,
   })
 
   let collection!: SqliteCollection<TRow, TKey, TIndexes>
@@ -176,13 +183,14 @@ export function createSqliteCollection<
       return
     }
 
-    persistSqliteMutations(
+    await persistSqliteMutations(
       options as unknown as CreateSqliteCollectionOptions<
         TRow,
         string | number,
         SqliteIndexMap
       >,
       relevantMutations,
+      columnNames,
     )
     baseOptions.utils.acceptMutations({
       mutations: relevantMutations as Array<PendingMutation<Record<string, unknown>>>,
@@ -221,11 +229,11 @@ export function createSqliteCollection<
   return collection
 }
 
-function readAllRows<TRow extends object>(
-  database: FrontendSqliteDatabase,
+async function readAllRows<TRow extends object>(
+  database: AsyncSqliteDatabase,
   tableName: string,
   orderBy?: string,
-): TRow[] {
+): Promise<TRow[]> {
   const sql = orderBy
     ? `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY ${orderBy};`
     : `SELECT * FROM "${escapeIdentifier(tableName)}";`
@@ -237,7 +245,7 @@ function createSqliteQueryInitializer<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
 >(
-  database: FrontendSqliteDatabase,
+  database: AsyncSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
 ): SqliteQueryInitializer<TRow, TIndexes> {
@@ -271,14 +279,14 @@ function createSqliteQueryInitializer<
 }
 
 function createIndexedQuery<TRow extends object>(
-  database: FrontendSqliteDatabase,
+  database: AsyncSqliteDatabase,
   tableName: string,
   indexFields: readonly string[],
   range: SqliteQueryRangeState,
 ): SqliteIndexedQuery<TRow> {
   let direction: 'asc' | 'desc' = 'asc'
 
-  const run = (limit?: number): TRow[] => {
+  const run = async (limit?: number): Promise<TRow[]> => {
     const { sql, bind } = buildIndexedSelectSql(
       tableName,
       indexFields,
@@ -294,14 +302,15 @@ function createIndexedQuery<TRow extends object>(
       direction = nextDirection
       return this
     },
-    collect() {
+    async collect() {
       return run()
     },
-    first() {
-      return run(1)[0] ?? null
+    async first() {
+      const rows = await run(1)
+      return rows[0] ?? null
     },
-    unique() {
-      const rows = run(2)
+    async unique() {
+      const rows = await run(2)
 
       if (rows.length > 1) {
         throw new Error('Expected a unique result, but found multiple rows.')
@@ -309,27 +318,28 @@ function createIndexedQuery<TRow extends object>(
 
       return rows[0] ?? null
     },
-    take(limit) {
+    async take(limit) {
       return run(limit)
     },
   }
 }
 
-function persistSqliteMutations<TRow extends object>(
+async function persistSqliteMutations<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutations: Array<PendingMutation<TRow>>,
-): void {
-  options.database.execute('BEGIN')
+  columnNames: Set<string>,
+): Promise<void> {
+  await options.database.execute('BEGIN')
 
   try {
     for (const mutation of mutations) {
-      applyMutation(options, mutation)
+      await applyMutation(options, mutation, columnNames)
     }
 
-    options.database.execute('COMMIT')
+    await options.database.execute('COMMIT')
   } catch (error) {
     try {
-      options.database.execute('ROLLBACK')
+      await options.database.execute('ROLLBACK')
     } catch {
       // Ignore rollback errors and rethrow the original failure.
     }
@@ -338,33 +348,35 @@ function persistSqliteMutations<TRow extends object>(
   }
 }
 
-function applyMutation<TRow extends object>(
+async function applyMutation<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
-): void {
+  columnNames: Set<string>,
+): Promise<void> {
   switch (mutation.type) {
     case 'insert':
-      insertRow(options, mutation.modified)
+      await insertRow(options, mutation.modified, columnNames)
       return
     case 'update':
-      updateRow(options, mutation)
+      await updateRow(options, mutation, columnNames)
       return
     case 'delete':
-      deleteRow(options, mutation.key)
+      await deleteRow(options, mutation.key)
       return
   }
 }
 
-function insertRow<TRow extends object>(
+async function insertRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   row: TRow,
-): void {
-  const completeRow = withInsertSystemFields(options, row)
-  validateReferenceColumns(options, completeRow)
+  columnNames: Set<string>,
+): Promise<void> {
+  const completeRow = withInsertSystemFields(row, columnNames)
+  await validateReferenceColumns(options, completeRow)
   const entries = Object.entries(completeRow)
 
   if (entries.length === 0) {
-    options.database.execute(
+    await options.database.execute(
       `INSERT INTO "${escapeIdentifier(options.tableName)}" DEFAULT VALUES;`,
     )
     return
@@ -374,18 +386,19 @@ function insertRow<TRow extends object>(
   const values = entries.map(([, value]) => value) as any[]
   const placeholders = entries.map(() => '?')
 
-  options.database.execute(
+  await options.database.execute(
     `INSERT INTO "${escapeIdentifier(options.tableName)}" (${columns.join(', ')}) VALUES (${placeholders.join(', ')});`,
     values,
   )
 }
 
-function updateRow<TRow extends object>(
+async function updateRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
-): void {
-  const changes = withUpdateSystemFields(options, mutation.changes)
-  validateReferenceColumns(options, changes)
+  columnNames: Set<string>,
+): Promise<void> {
+  const changes = withUpdateSystemFields(mutation.changes, columnNames)
+  await validateReferenceColumns(options, changes)
   const entries = Object.entries(changes).filter(
     ([column]) => column !== options.keyColumn,
   )
@@ -399,17 +412,17 @@ function updateRow<TRow extends object>(
   )
   const values = entries.map(([, value]) => value) as any[]
 
-  options.database.execute(
+  await options.database.execute(
     `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(', ')} WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
     [...values, mutation.key],
   )
 }
 
-function deleteRow<TRow extends object>(
+async function deleteRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   key: string | number,
-): void {
-  options.database.execute(
+): Promise<void> {
+  await options.database.execute(
     `DELETE FROM "${escapeIdentifier(options.tableName)}" WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
     [key],
   )
@@ -420,13 +433,10 @@ function escapeIdentifier(identifier: string): string {
 }
 
 function withInsertSystemFields<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   row: TRow,
+  columnNames: Set<string>,
 ): Record<string, unknown> {
   const nextRow = { ...(row as Record<string, unknown>) }
-  const columnNames = new Set(
-    options.database.getTableColumns(options.tableName).map((column) => column.name),
-  )
 
   if (columnNames.has('_createdAt') && nextRow._createdAt === undefined) {
     nextRow._createdAt = currentTimestamp()
@@ -444,13 +454,10 @@ function withInsertSystemFields<TRow extends object>(
 }
 
 function withUpdateSystemFields<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   changes: Partial<TRow>,
+  columnNames: Set<string>,
 ): Record<string, unknown> {
   const nextChanges = { ...(changes as Record<string, unknown>) }
-  const columnNames = new Set(
-    options.database.getTableColumns(options.tableName).map((column) => column.name),
-  )
 
   if (columnNames.has('_updatedAt') && nextChanges._updatedAt === undefined) {
     nextChanges._updatedAt = currentTimestamp()
@@ -459,10 +466,10 @@ function withUpdateSystemFields<TRow extends object>(
   return nextChanges
 }
 
-function validateReferenceColumns<TRow extends object>(
+async function validateReferenceColumns<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   rowOrChanges: Record<string, unknown>,
-): void {
+): Promise<void> {
   const referenceColumns = options.referenceColumns as
     | Record<string, SqliteReferenceColumn | undefined>
     | undefined
@@ -478,7 +485,8 @@ function validateReferenceColumns<TRow extends object>(
       continue
     }
 
-    if (!options.database.rowExists(config.referencedTable, value as any)) {
+    const exists = await options.database.rowExists(config.referencedTable, value as any)
+    if (!exists) {
       throw new Error(
         `Referenced ${config.referencedTable} row "${String(value)}" does not exist.`,
       )

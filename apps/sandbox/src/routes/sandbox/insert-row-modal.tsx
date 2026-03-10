@@ -27,6 +27,7 @@ export interface InsertModalState {
   tableName: SqliteDemoTableName
   draft: SqliteInsertDraft
   transaction: PendingInsertTransaction
+  referenceRows: Record<string, SqliteDemoRow[]>
 }
 
 export function InsertRowModal({
@@ -77,9 +78,7 @@ export function InsertRowModal({
                 column.name,
               )
               const referenceRows = referenceColumn
-                ? (workspace.readRows(
-                    referenceColumn.referencedTable as SqliteDemoTableName,
-                  ) as SqliteDemoRow[])
+                ? (modal.referenceRows[column.name] ?? [])
                 : []
 
               return (

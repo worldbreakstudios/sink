@@ -1,3 +1,3 @@
-export * from './sqlite'
-export * from './sqlite-collection'
-export * from './schema'
+export * from './sqlite.js'
+export * from './sqlite-collection.js'
+export * from './schema.js'

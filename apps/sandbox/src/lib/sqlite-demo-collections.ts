@@ -1,6 +1,6 @@
 import type { TransactionConfig } from '@tanstack/db'
-import { FrontendSqliteDatabase } from '@sink/lib'
-import type { SqliteReferenceColumn } from '@sink/lib'
+import type { AsyncSqliteDatabase, PersistenceType, SqliteReferenceColumn } from '@sink/lib'
+import { createDatabase } from '@sink/lib'
 import {
   REFERENCE_COLUMNS,
   createAllTables,
@@ -20,23 +20,24 @@ export type SqliteDemoTableName = TableName
 export type SqliteInsertDraft = Record<string, string>
 
 export interface SqliteDemoCollectionsWorkspace {
-  database: FrontendSqliteDatabase
+  database: AsyncSqliteDatabase
+  persistenceType: PersistenceType
   collections: SchemaCollections
   getReferenceColumn: (
     tableName: SqliteDemoTableName,
     columnName: string,
   ) => SqliteReferenceColumn | null
-  readRows: (tableName: SqliteDemoTableName) => SqliteDemoRow[]
-  inspectTables: FrontendSqliteDatabase['inspectTables']
+  readRows: (tableName: SqliteDemoTableName) => Promise<SqliteDemoRow[]>
+  inspectTables: (limit?: number) => Promise<ReturnType<AsyncSqliteDatabase['inspectTables']> extends Promise<infer T> ? T : never>
   createBatchTransaction: (
     config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
   ) => ReturnType<typeof createBatchTransaction>
-  createInsertDraft: (tableName: SqliteDemoTableName) => SqliteInsertDraft
+  createInsertDraft: (tableName: SqliteDemoTableName) => Promise<SqliteInsertDraft>
   queueInsert: (
     tableName: SqliteDemoTableName,
     draft: SqliteInsertDraft,
     transaction: ReturnType<typeof createBatchTransaction>,
-  ) => void
+  ) => Promise<void>
   updateCell: (
     tableName: SqliteDemoTableName,
     key: SqliteDemoId,
@@ -44,7 +45,7 @@ export interface SqliteDemoCollectionsWorkspace {
     value: string,
   ) => Promise<void>
   insertRow: (tableName: SqliteDemoTableName) => Promise<void>
-  close: () => void
+  close: () => Promise<void>
 }
 
 interface MutableSqliteDemoCollection {
@@ -54,7 +55,7 @@ interface MutableSqliteDemoCollection {
     callback: (draft: Record<string, unknown>) => void,
   ) => void
   utils: {
-    readAll: () => AnyRow[]
+    readAll: () => Promise<AnyRow[]>
   }
 }
 
@@ -65,22 +66,7 @@ function getCollection(
   return collections[tableName] as unknown as MutableSqliteDemoCollection
 }
 
-async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
-  // Use localStorage persistence (~5MB limit, works on main thread)
-  // Note: Only ONE localStorage database is supported per origin
-  const db = await FrontendSqliteDatabase.createWithLocalStorage('local')
-
-  // Create tables (IF NOT EXISTS)
-  createAllTables(db)
-
-  // Check if demo data already exists - skip seeding if so
-  const existingRows = db.query<{ count: number }>(
-    'SELECT COUNT(*) as count FROM fieldTypes',
-  )
-  if ((existingRows[0]?.count ?? 0) > 0) {
-    return db
-  }
-
+async function seedDemoData(db: AsyncSqliteDatabase): Promise<void> {
   const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
   const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
   const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
@@ -97,88 +83,50 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const bodyFieldCreatedAt = 1709748180000n
   const statusFieldCreatedAt = 1709748720000n
 
-  db.execute(
-    `
-      INSERT INTO fieldTypes (_id, name)
-      VALUES
-        (?, ?),
-        (?, ?),
-        (?, ?);
-    `,
-    [
-      textFieldTypeId,
-      'text',
-      richTextFieldTypeId,
-      'rich_text',
-      statusFieldTypeId,
-      'status',
-    ],
+  await db.execute(
+    `INSERT INTO fieldTypes (_id, name) VALUES (?, ?), (?, ?), (?, ?);`,
+    [textFieldTypeId, 'text', richTextFieldTypeId, 'rich_text', statusFieldTypeId, 'status'],
   )
 
-  db.execute(
-    `
-      INSERT INTO objectTypes (_id, name)
-      VALUES
-        (?, ?),
-        (?, ?);
-    `,
+  await db.execute(
+    `INSERT INTO objectTypes (_id, name) VALUES (?, ?), (?, ?);`,
     [noteObjectTypeId, 'note', taskObjectTypeId, 'task'],
   )
 
-  db.execute(
-    `
-      INSERT INTO objects (_id, _createdAt, type_id)
-      VALUES
-        (?, ?, ?),
-        (?, ?, ?);
-    `,
-    [
-      inboxObjectId,
-      inboxObjectCreatedAt,
-      noteObjectTypeId,
-      taskObjectId,
-      taskObjectCreatedAt,
-      taskObjectTypeId,
-    ],
+  await db.execute(
+    `INSERT INTO objects (_id, _createdAt, type_id) VALUES (?, ?, ?), (?, ?, ?);`,
+    [inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId, taskObjectId, taskObjectCreatedAt, taskObjectTypeId],
   )
 
-  db.execute(
-    `
-      INSERT INTO fields (_id, _createdAt, object_id, field_type_id, name, body)
-      VALUES
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?);
-    `,
+  await db.execute(
+    `INSERT INTO fields (_id, _createdAt, object_id, field_type_id, name, body) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?);`,
     [
-      titleFieldId,
-      titleFieldCreatedAt,
-      inboxObjectId,
-      textFieldTypeId,
-      'title',
-      'Welcome note title',
-      bodyFieldId,
-      bodyFieldCreatedAt,
-      inboxObjectId,
-      richTextFieldTypeId,
-      'body',
-      'Initial sandbox note body',
-      statusFieldId,
-      statusFieldCreatedAt,
-      taskObjectId,
-      statusFieldTypeId,
-      'status',
-      'open',
+      titleFieldId, titleFieldCreatedAt, inboxObjectId, textFieldTypeId, 'title', 'Welcome note title',
+      bodyFieldId, bodyFieldCreatedAt, inboxObjectId, richTextFieldTypeId, 'body', 'Initial sandbox note body',
+      statusFieldId, statusFieldCreatedAt, taskObjectId, statusFieldTypeId, 'status', 'open',
     ],
   )
-
-  return db
 }
 
 export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemoCollectionsWorkspace> {
-  const database = await createSqliteDemoDatabase()
+  // Create database with OPFS as default, localStorage as fallback
+  const { database, persistenceType } = await createDatabase({
+    preferredPersistence: 'opfs',
+    opfsFilename: 'sqlite-demo.db',
+  })
 
-  const collections = createCollections(database)
+  // Create tables
+  await createAllTables(database)
+
+  // Check if demo data already exists - skip seeding if so
+  const existingRows = await database.query<{ count: number }>(
+    'SELECT COUNT(*) as count FROM fieldTypes',
+  )
+  if ((existingRows[0]?.count ?? 0) === 0) {
+    await seedDemoData(database)
+  }
+
+  const collections = await createCollections(database)
 
   const makeBatchTx = (
     config?: Omit<TransactionConfig<AnyRow>, 'mutationFn'>,
@@ -186,17 +134,20 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
 
   return {
     database,
+    persistenceType,
     collections,
     getReferenceColumn(tableName, columnName) {
       return REFERENCE_COLUMNS[tableName][columnName] ?? null
     },
-    readRows(tableName) {
+    async readRows(tableName) {
       return getCollection(collections, tableName).utils.readAll()
     },
-    inspectTables: database.inspectTables.bind(database),
+    async inspectTables(limit) {
+      return database.inspectTables(limit)
+    },
     createBatchTransaction: makeBatchTx,
-    createInsertDraft(tableName) {
-      const row = database.createInsertableRow(tableName)
+    async createInsertDraft(tableName) {
+      const row = await database.createInsertableRow(tableName)
 
       for (const [columnName, config] of Object.entries(
         REFERENCE_COLUMNS[tableName],
@@ -205,7 +156,7 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
           continue
         }
 
-        const referencedRows = getCollection(
+        const referencedRows = await getCollection(
           collections,
           config.referencedTable as SqliteDemoTableName,
         ).utils.readAll()
@@ -219,20 +170,21 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
         ]),
       )
     },
-    queueInsert(tableName, draft, transaction) {
-      const row = Object.fromEntries(
-        Object.entries(draft).map(([columnName, value]) => [
+    async queueInsert(tableName, draft, transaction) {
+      const entries = await Promise.all(
+        Object.entries(draft).map(async ([columnName, value]) => [
           columnName,
-          database.coerceTableValue(tableName, columnName, value),
+          await database.coerceTableValue(tableName, columnName, value),
         ]),
-      ) as unknown as AnyRow
+      )
+      const row = Object.fromEntries(entries) as unknown as AnyRow
 
       transaction.mutate(() => {
         getCollection(collections, tableName).insert(row)
       })
     },
     async updateCell(tableName, key, columnName, value) {
-      const typedValue = database.coerceTableValue(tableName, columnName, value)
+      const typedValue = await database.coerceTableValue(tableName, columnName, value)
       const transaction = makeBatchTx()
 
       transaction.mutate(() => {
@@ -245,7 +197,7 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
     },
     async insertRow(tableName) {
       const transaction = makeBatchTx()
-      const newRow = database.createInsertableRow(
+      const newRow = await database.createInsertableRow(
         tableName,
       ) as unknown as AnyRow
 
@@ -255,8 +207,8 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
 
       await transaction.isPersisted.promise
     },
-    close() {
-      database.close()
+    async close() {
+      await database.close()
     },
   }
 }
