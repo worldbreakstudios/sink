@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import type { SqliteTableColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,7 +12,11 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import { cn } from '@/lib/utils'
 import { formatCellValue, getRowValue, isMultilineColumn } from './utils'
+
+const DEFAULT_COLUMN_WIDTH = 150
+const MIN_COLUMN_WIDTH = 50
 
 export function DataTable({
   tableName,
@@ -32,8 +36,44 @@ export function DataTable({
     columnName: string
     value: string
   } | null>(null)
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [resizing, setResizing] = useState<{ columnName: string; startX: number; startWidth: number } | null>(null)
 
   const columnNames = columns.map((column) => column.name)
+
+  // Reset column widths when table changes
+  useEffect(() => {
+    setColumnWidths({})
+  }, [tableName])
+
+  // Handle column resize
+  useEffect(() => {
+    if (!resizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - resizing.startX
+      const newWidth = Math.max(MIN_COLUMN_WIDTH, resizing.startWidth + delta)
+      setColumnWidths((prev) => ({ ...prev, [resizing.columnName]: newWidth }))
+    }
+
+    const handleMouseUp = () => {
+      setResizing(null)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [resizing])
+
+  const handleResizeStart = useCallback((e: React.MouseEvent, columnName: string) => {
+    e.preventDefault()
+    const currentWidth = columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH
+    setResizing({ columnName, startX: e.clientX, startWidth: currentWidth })
+  }, [columnWidths])
 
   const readOnlyColumns = useMemo(
     () =>
@@ -90,12 +130,25 @@ export function DataTable({
             No rows in this table.
           </div>
         ) : (
-          <Table>
+          <Table style={{ tableLayout: 'fixed' }}>
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {columnNames.map((columnName) => (
-                  <TableHead key={columnName} className="whitespace-nowrap">
+                  <TableHead
+                    key={columnName}
+                    className="relative whitespace-nowrap"
+                    style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
+                  >
                     {columnName}
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={(e) => handleResizeStart(e, columnName)}
+                      className={cn(
+                        'absolute right-0 top-0 bottom-0 w-1 cursor-col-resize',
+                        'hover:bg-primary/40',
+                        resizing?.columnName === columnName ? 'bg-primary/50' : 'bg-border',
+                      )}
+                    />
                   </TableHead>
                 ))}
               </TableRow>
@@ -109,7 +162,8 @@ export function DataTable({
                     {columnNames.map((columnName) => (
                       <TableCell
                         key={`${tableName}-${rowId}-${columnName}`}
-                        className="max-w-xs truncate font-mono text-xs"
+                        className="truncate font-mono text-xs"
+                        style={{ width: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH }}
                       >
                         {editingCell?.rowId === rowId &&
                         editingCell.columnName === columnName ? (
