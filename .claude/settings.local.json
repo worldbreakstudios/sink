@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc --noEmit -p apps/sandbox/tsconfig.json)",
-      "Bash(npx tsc --noEmit -p packages/lib/tsconfig.json)"
+      "Bash(npx tsc --noEmit -p packages/lib/tsconfig.json)",
+      "WebFetch(domain:sqlite.org)"
     ]
   }
 }

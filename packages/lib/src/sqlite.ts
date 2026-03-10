@@ -86,17 +86,18 @@ export class FrontendSqliteDatabase {
    * Creates a database persisted to localStorage via JsStorageDb.
    * Limited to ~5MB due to localStorage constraints.
    * Works on main thread without special headers.
+   * Note: Only ONE localStorage database is supported per origin.
    */
-  static async createWithLocalStorage(filename: string) {
+  static async createWithLocalStorage(storage: 'local' | 'session' = 'local') {
     const sqlite = await loadSqlite()
     const JsStorageDb = (sqlite.oo1 as Record<string, unknown>)
-      .JsStorageDb as new (filename: string) => Database
+      .JsStorageDb as new (storage: 'local' | 'session') => Database
 
     if (!JsStorageDb) {
       throw new Error('JsStorageDb is not available in this sqlite-wasm build.')
     }
 
-    const db = new JsStorageDb(filename)
+    const db = new JsStorageDb(storage)
     return new FrontendSqliteDatabase(sqlite, db)
   }
 

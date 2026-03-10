@@ -67,10 +67,20 @@ function getCollection(
 
 async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   // Use localStorage persistence (~5MB limit, works on main thread)
-  // For OPFS persistence, SQLite must run in a Web Worker
-  const db = await FrontendSqliteDatabase.createWithLocalStorage(
-    'sqlite-demo-database',
+  // Note: Only ONE localStorage database is supported per origin
+  const db = await FrontendSqliteDatabase.createWithLocalStorage('local')
+
+  // Create tables (IF NOT EXISTS)
+  createAllTables(db)
+
+  // Check if demo data already exists - skip seeding if so
+  const existingRows = db.query<{ count: number }>(
+    'SELECT COUNT(*) as count FROM fieldTypes',
   )
+  if ((existingRows[0]?.count ?? 0) > 0) {
+    return db
+  }
+
   const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
   const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
   const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
@@ -86,7 +96,6 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
   const titleFieldCreatedAt = 1709748120000n
   const bodyFieldCreatedAt = 1709748180000n
   const statusFieldCreatedAt = 1709748720000n
-  createAllTables(db)
 
   db.execute(
     `
