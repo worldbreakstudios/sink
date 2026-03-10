@@ -19,6 +19,47 @@ const DEFAULT_COLUMN_WIDTH = 150
 const MIN_COLUMN_WIDTH = 50
 const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 
+function ReadOnlyCell({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }, [value])
+
+  return (
+    <div className="group/cell flex items-center gap-1">
+      <span className="truncate text-muted-foreground">{value}</span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className={cn(
+          'shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover/cell:opacity-100',
+          'hover:bg-muted',
+          copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground hover:text-foreground',
+        )}
+        aria-label="Copy value"
+      >
+        {copied ? (
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        ) : (
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+          </svg>
+        )}
+      </button>
+    </div>
+  )
+}
+
 interface TableLayout {
   columnWidths: Record<string, number>
   columnOrder: string[]
@@ -326,9 +367,7 @@ export function DataTable({
                             />
                           )
                         ) : readOnlyColumns.has(columnName) ? (
-                          <span className="block truncate text-muted-foreground">
-                            {formatCellValue(getRowValue(row, columnName))}
-                          </span>
+                          <ReadOnlyCell value={formatCellValue(getRowValue(row, columnName))} />
                         ) : (
                           <button
                             type="button"
