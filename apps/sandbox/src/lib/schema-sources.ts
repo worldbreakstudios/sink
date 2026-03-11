@@ -53,12 +53,9 @@ export function generateSchemaSource(table: SqliteTableSnapshot): string {
   // Build the defineTable call
   let code = `import { defineTable, v } from '@sink/lib'
 
-export default defineTable(
-  '${tableName}',
-  {
+export default defineTable('${tableName}', {
 ${schemaFields.join('\n')}
-  },
-)`
+})`
 
   // Add implicit column methods
   if (hasCreatedAt) {

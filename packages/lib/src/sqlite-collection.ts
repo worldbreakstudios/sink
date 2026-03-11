@@ -20,7 +20,6 @@ export interface CreateSqliteCollectionOptions<
   keyColumn: keyof TRow & string
   getKey: (row: TRow) => TKey
   database: AsyncSqliteDatabase
-  orderBy?: string
   referenceColumns?: Partial<Record<keyof TRow & string, SqliteReferenceColumn>>
   indexes?: TIndexes
 }
@@ -124,10 +123,27 @@ export interface SqliteBoundIndexRangeBuilder<
   ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>
 }
 
-export interface SqliteQueryInitializer<
+/**
+ * Fluent query builder for SQLite collections.
+ *
+ * Queries default to using the `by_id` index if no index is specified:
+ * ```ts
+ * collection.query().collect()           // All rows, ordered by _id ASC
+ * collection.query().order('desc').take(10)  // Last 10 by _id
+ * ```
+ *
+ * Use `.withIndex()` for queries on other indexes:
+ * ```ts
+ * collection.query().withIndex('by_email', q => q.eq('email', 'test@example.com')).first()
+ * ```
+ */
+export interface SqliteQuery<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
 > {
+  /**
+   * Select an index to query. If not called, defaults to `by_id`.
+   */
   withIndex<TIndexName extends keyof TIndexes & string>(
     indexName: TIndexName,
     build?:
@@ -135,16 +151,42 @@ export interface SqliteQueryInitializer<
           builder: SqliteIndexRangeBuilder<TRow, TIndexes[TIndexName]['fields']>,
         ) => unknown)
       | undefined,
-  ): SqliteIndexedQuery<TRow>
-}
+  ): SqliteQuery<TRow, TIndexes>
 
-export interface SqliteIndexedQuery<TRow extends object> {
-  order(direction: 'asc' | 'desc'): SqliteIndexedQuery<TRow>
+  /**
+   * Set the sort direction. Defaults to 'asc'.
+   */
+  order(direction: 'asc' | 'desc'): SqliteQuery<TRow, TIndexes>
+
+  /**
+   * Execute the query and return all matching rows.
+   */
   collect(): Promise<TRow[]>
+
+  /**
+   * Execute the query and return the first matching row, or null.
+   */
   first(): Promise<TRow | null>
+
+  /**
+   * Execute the query and return the single matching row.
+   * Throws if more than one row matches.
+   */
   unique(): Promise<TRow | null>
+
+  /**
+   * Execute the query and return up to `limit` rows.
+   */
   take(limit: number): Promise<TRow[]>
 }
+
+// Keep old interface names as aliases for backwards compatibility
+export type SqliteQueryInitializer<
+  TRow extends object,
+  TIndexes extends SqliteIndexMap,
+> = SqliteQuery<TRow, TIndexes>
+
+export type SqliteIndexedQuery<TRow extends object> = SqliteQuery<TRow, Record<string, never>>
 
 export async function createSqliteCollection<
   TRow extends object,
@@ -153,8 +195,8 @@ export async function createSqliteCollection<
 >(
   options: CreateSqliteCollectionOptions<TRow, TKey, TIndexes>,
 ): Promise<SqliteCollection<TRow, TKey, TIndexes>> {
-  // Load initial data asynchronously
-  const initialData = await readAllRows<TRow>(options.database, options.tableName, options.orderBy)
+  // Load initial data asynchronously (ordered by _id)
+  const initialData = await readAllRows<TRow>(options.database, options.tableName)
 
   // Cache table columns for system fields (avoid repeated async calls)
   const tableColumns = await options.database.getTableColumns(options.tableName)
@@ -169,7 +211,7 @@ export async function createSqliteCollection<
   let collection!: SqliteCollection<TRow, TKey, TIndexes>
 
   const readAll = () =>
-    readAllRows<TRow>(options.database, options.tableName, options.orderBy)
+    readAllRows<TRow>(options.database, options.tableName)
 
   const persistMutations = async (transaction: {
     mutations: Array<PendingMutation<any>>
@@ -220,7 +262,7 @@ export async function createSqliteCollection<
   }) as unknown as SqliteCollection<TRow, TKey, TIndexes>
 
   collection.query = () =>
-    createSqliteQueryInitializer<TRow, TIndexes>(
+    createSqliteQuery<TRow, TIndexes>(
       options.database,
       options.tableName,
       options.indexes ?? ({} as TIndexes),
@@ -232,23 +274,37 @@ export async function createSqliteCollection<
 async function readAllRows<TRow extends object>(
   database: AsyncSqliteDatabase,
   tableName: string,
-  orderBy?: string,
 ): Promise<TRow[]> {
-  const sql = orderBy
-    ? `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY ${orderBy};`
-    : `SELECT * FROM "${escapeIdentifier(tableName)}";`
-
-  return database.query<TRow>(sql)
+  return database.query<TRow>(
+    `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY "_id" ASC;`,
+  )
 }
 
-function createSqliteQueryInitializer<
+function createSqliteQuery<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
 >(
   database: AsyncSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
-): SqliteQueryInitializer<TRow, TIndexes> {
+  initialIndexFields: readonly string[] = ['_id'],
+  initialRange: SqliteQueryRangeState = { equals: [], lowerBound: null, upperBound: null },
+): SqliteQuery<TRow, TIndexes> {
+  let indexFields = initialIndexFields
+  let range = initialRange
+  let direction: 'asc' | 'desc' = 'asc'
+
+  const run = async (limit?: number): Promise<TRow[]> => {
+    const { sql, bind } = buildIndexedSelectSql(
+      tableName,
+      indexFields,
+      range,
+      direction,
+      limit,
+    )
+    return database.query<TRow>(sql, bind as any)
+  }
+
   return {
     withIndex(indexName, build) {
       const runtimeIndex = indexes[indexName]
@@ -268,36 +324,10 @@ function createSqliteQueryInitializer<
         )
       }
 
-      return createIndexedQuery<TRow>(
-        database,
-        tableName,
-        runtimeIndex.fields,
-        rangeBuilder.getState(),
-      )
+      indexFields = runtimeIndex.fields
+      range = rangeBuilder.getState()
+      return this
     },
-  }
-}
-
-function createIndexedQuery<TRow extends object>(
-  database: AsyncSqliteDatabase,
-  tableName: string,
-  indexFields: readonly string[],
-  range: SqliteQueryRangeState,
-): SqliteIndexedQuery<TRow> {
-  let direction: 'asc' | 'desc' = 'asc'
-
-  const run = async (limit?: number): Promise<TRow[]> => {
-    const { sql, bind } = buildIndexedSelectSql(
-      tableName,
-      indexFields,
-      range,
-      direction,
-      limit,
-    )
-    return database.query<TRow>(sql, bind as any)
-  }
-
-  return {
     order(nextDirection) {
       direction = nextDirection
       return this

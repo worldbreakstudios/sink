@@ -151,7 +151,6 @@ export const v = {
 } as const
 
 export interface TableDefinitionOptions {
-  orderBy?: string
   withCreatedAt?: boolean
   withUpdatedAt?: boolean
   withArchivedAt?: boolean

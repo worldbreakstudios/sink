@@ -173,7 +173,6 @@ export function emit(definitions: TableDefinition[]): string {
   )
   lines.push('  return {')
   for (const def of definitions) {
-    const orderBy = def.options.orderBy
     lines.push(
       `    ${def.tableName}: await createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
     )
@@ -184,9 +183,6 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push(`      database: db,`)
     lines.push(`      indexes: INDEXES.${def.tableName},`)
     lines.push(`      referenceColumns: REFERENCE_COLUMNS.${def.tableName},`)
-    if (orderBy) {
-      lines.push(`      orderBy: '${orderBy}',`)
-    }
     lines.push('    }),')
   }
   lines.push('  }')
