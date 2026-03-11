@@ -51,7 +51,7 @@ export function CodeBlock({ code, language = 'typescript', className }: CodeBloc
         onClick={handleCopy}
         className={cn(
           'absolute right-2 top-2 z-10 rounded-md border px-2 py-1 text-xs font-medium transition-all',
-          'opacity-0 group-hover:opacity-100 focus:opacity-100',
+          '',
           copied
             ? 'border-green-500 bg-green-500/10 text-green-600 dark:text-green-400'
             : 'border-neutral-300 bg-white/90 text-neutral-600 hover:bg-white hover:text-neutral-900 dark:border-neutral-600 dark:bg-neutral-800/90 dark:text-neutral-300 dark:hover:bg-neutral-700 dark:hover:text-neutral-100',

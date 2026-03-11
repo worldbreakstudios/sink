@@ -170,7 +170,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={handleCopy}
       className={cn(
-        'ml-2 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100',
+        'ml-2 rounded p-1 text-muted-foreground',
         'hover:bg-muted hover:text-foreground',
         copied && 'text-green-600 dark:text-green-400',
       )}

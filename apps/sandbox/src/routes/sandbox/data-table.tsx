@@ -86,7 +86,7 @@ function ReadOnlyCell({ value }: { value: string }) {
         type="button"
         onClick={handleCopy}
         className={cn(
-          'shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover/cell:opacity-100',
+          'shrink-0 rounded p-0.5',
           'hover:bg-muted',
           copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground hover:text-foreground',
         )}
