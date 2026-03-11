@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import type { SqliteIndexSnapshot } from '@sink/lib'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import type { SqliteIndexSnapshot, SqliteTableSnapshot } from '@sink/lib'
 import { CodeBlock } from '@/components/ui/code-block'
-import { getSchemaSource } from '@/data/schema-sources'
+import { getSchemaSource } from '@/lib/schema-sources'
 import { cn } from '@/lib/utils'
 
 type TabType = 'schema' | 'indexes'
@@ -12,11 +12,13 @@ const DEFAULT_WIDTH = 320
 
 export function RightSidebar({
   tableName,
+  tables,
   indexes,
   isOpen,
   onClose,
 }: {
   tableName: string
+  tables: SqliteTableSnapshot[]
   indexes: SqliteIndexSnapshot[]
   isOpen: boolean
   onClose: () => void
@@ -25,7 +27,7 @@ export function RightSidebar({
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLElement>(null)
-  const schemaSource = getSchemaSource(tableName)
+  const schemaSource = useMemo(() => getSchemaSource(tableName, tables), [tableName, tables])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -145,7 +147,7 @@ function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableN
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Schema definition from <code className="rounded bg-muted px-1">{tableName}.schema.ts</code>
+        Generated schema for <code className="rounded bg-muted px-1">{tableName}</code>
       </p>
       <CodeBlock code={schemaSource.trim()} language="typescript" />
     </div>

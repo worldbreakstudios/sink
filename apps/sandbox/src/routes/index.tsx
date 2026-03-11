@@ -420,6 +420,7 @@ function App() {
           {/* Right Sidebar - Schema/Indexes */}
           <RightSidebar
             tableName={selectedTable.name}
+            tables={tables}
             indexes={selectedTableIndexes}
             isOpen={rightSidebarOpen}
             onClose={() => setRightSidebarOpen(false)}

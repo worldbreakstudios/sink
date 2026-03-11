@@ -1,0 +1,104 @@
+import type { SqliteTableSnapshot } from '@sink/lib'
+import { REFERENCE_COLUMNS, INDEXES, type TableName } from '@/data/generated/schema.gen'
+
+/**
+ * Generate defineTable schema source code from table metadata
+ */
+export function generateSchemaSource(table: SqliteTableSnapshot): string {
+  const tableName = table.name as TableName
+  const referenceColumns = REFERENCE_COLUMNS[tableName] ?? {}
+  const tableIndexes = INDEXES[tableName] ?? {}
+
+  // Separate implicit columns from user columns
+  const implicitColumnNames = new Set(['_id', '_createdAt', '_updatedAt', '_archivedAt'])
+  const userColumns = table.columns.filter((col) => !implicitColumnNames.has(col.name))
+
+  // Detect which implicit columns exist
+  const hasCreatedAt = table.columns.some((col) => col.name === '_createdAt')
+  const hasUpdatedAt = table.columns.some((col) => col.name === '_updatedAt')
+  const hasArchivedAt = table.columns.some((col) => col.name === '_archivedAt')
+
+  // Generate validator for each column
+  const schemaFields = userColumns.map((col) => {
+    const ref = referenceColumns[col.name]
+    let validator: string
+
+    if (ref) {
+      // Foreign key reference
+      validator = ref.enforceExists
+        ? `v.id('${ref.referencedTable}', { enforceExists: true })`
+        : `v.id('${ref.referencedTable}')`
+    } else {
+      // Infer type from SQLite type
+      const sqlType = col.type.toUpperCase()
+      if (sqlType.includes('INT')) {
+        validator = 'v.number()'
+      } else if (sqlType.includes('REAL') || sqlType.includes('FLOAT') || sqlType.includes('DOUBLE')) {
+        validator = 'v.number()'
+      } else if (sqlType.includes('BOOL')) {
+        validator = 'v.boolean()'
+      } else {
+        validator = 'v.string()'
+      }
+    }
+
+    // Wrap with optional if nullable
+    if (col.notnull === 0 && col.pk === 0) {
+      validator = `v.optional(${validator})`
+    }
+
+    return `    ${col.name}: ${validator},`
+  })
+
+  // Build the defineTable call
+  let code = `import { defineTable, v } from '@sink/lib'
+
+export default defineTable(
+  '${tableName}',
+  {
+${schemaFields.join('\n')}
+  },
+)`
+
+  // Add implicit column methods
+  if (hasCreatedAt) {
+    code += `\n  .withCreatedAt(true)`
+  }
+  if (hasUpdatedAt) {
+    code += `\n  .withUpdatedAt(true)`
+  }
+  if (hasArchivedAt) {
+    code += `\n  .withArchivedAt(true)`
+  }
+
+  // Add indexes (skip by_id and by_creation_time as they're implicit)
+  const implicitIndexNames = new Set(['by_id', 'by_creation_time'])
+  for (const [indexName, indexDef] of Object.entries(tableIndexes)) {
+    if (implicitIndexNames.has(indexName)) continue
+
+    const columnsStr = indexDef.fields.map((c: string) => `'${c}'`).join(', ')
+    if (indexDef.unique) {
+      code += `\n  .uniqueIndex('${indexName}', [${columnsStr}])`
+    } else {
+      code += `\n  .index('${indexName}', [${columnsStr}])`
+    }
+  }
+
+  return code
+}
+
+/**
+ * Get schema source for a table by name
+ * Falls back to a placeholder if table not found
+ */
+export function getSchemaSource(
+  tableName: string,
+  tables: SqliteTableSnapshot[],
+): string {
+  const table = tables.find((t) => t.name === tableName)
+  if (!table) {
+    return `// No schema found for table "${tableName}"`
+  }
+
+  return generateSchemaSource(table)
+}
