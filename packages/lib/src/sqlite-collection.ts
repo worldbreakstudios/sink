@@ -18,6 +18,7 @@ export interface CreateSqliteCollectionOptions<
   id: string
   tableName: string
   keyColumn: keyof TRow & string
+  actorKeyColumn?: keyof TRow & string
   getKey: (row: TRow) => TKey
   database: FrontendSqliteDatabase
   orderBy?: string
@@ -48,12 +49,16 @@ export interface SqliteCollectionUtils<TRow extends object>
   ): Transaction<TRow>
 }
 
+export interface SqliteQueryOptions {
+  actorId?: string
+}
+
 export type SqliteCollection<
   TRow extends object,
   TKey extends string | number,
   TIndexes extends SqliteIndexMap = Record<string, never>,
 > = Collection<TRow, TKey, SqliteCollectionUtils<TRow>> & {
-  query(): SqliteQueryInitializer<TRow, TIndexes>
+  query(options?: SqliteQueryOptions): SqliteQueryInitializer<TRow, TIndexes>
 }
 
 type Head<TFields extends readonly string[]> = TFields extends readonly [
@@ -211,11 +216,12 @@ export function createSqliteCollection<
     },
   }) as unknown as SqliteCollection<TRow, TKey, TIndexes>
 
-  collection.query = () =>
+  collection.query = (queryOptions?: SqliteQueryOptions) =>
     createSqliteQueryInitializer<TRow, TIndexes>(
       options.database,
       options.tableName,
       options.indexes ?? ({} as TIndexes),
+      options.actorKeyColumn ? queryOptions?.actorId : undefined,
     )
 
   return collection
@@ -240,6 +246,7 @@ function createSqliteQueryInitializer<
   database: FrontendSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
+  actorScope?: string,
 ): SqliteQueryInitializer<TRow, TIndexes> {
   return {
     withIndex(indexName, build) {
@@ -265,6 +272,7 @@ function createSqliteQueryInitializer<
         tableName,
         runtimeIndex.fields,
         rangeBuilder.getState(),
+        actorScope,
       )
     },
   }
@@ -275,6 +283,7 @@ function createIndexedQuery<TRow extends object>(
   tableName: string,
   indexFields: readonly string[],
   range: SqliteQueryRangeState,
+  actorScope?: string,
 ): SqliteIndexedQuery<TRow> {
   let direction: 'asc' | 'desc' = 'asc'
 
@@ -285,6 +294,7 @@ function createIndexedQuery<TRow extends object>(
       range,
       direction,
       limit,
+      actorScope,
     )
     return database.query<TRow>(sql, bind as any)
   }
@@ -386,8 +396,12 @@ function updateRow<TRow extends object>(
 ): void {
   const changes = withUpdateSystemFields(options, mutation.changes)
   validateReferenceColumns(options, changes)
+  const excludeColumns = new Set([options.keyColumn])
+  if (options.actorKeyColumn) {
+    excludeColumns.add(options.actorKeyColumn)
+  }
   const entries = Object.entries(changes).filter(
-    ([column]) => column !== options.keyColumn,
+    ([column]) => !excludeColumns.has(column as any),
   )
 
   if (entries.length === 0) {
@@ -399,20 +413,44 @@ function updateRow<TRow extends object>(
   )
   const values = entries.map(([, value]) => value) as any[]
 
-  options.database.execute(
-    `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(', ')} WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
-    [...values, mutation.key],
-  )
+  if (options.actorKeyColumn) {
+    const [id, actorId] = parseCompoundKey(String(mutation.key))
+    options.database.execute(
+      `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(', ')} WHERE "${escapeIdentifier(options.keyColumn)}" = ? AND "${escapeIdentifier(options.actorKeyColumn)}" = ?;`,
+      [...values, id, actorId],
+    )
+  } else {
+    options.database.execute(
+      `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(', ')} WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
+      [...values, mutation.key],
+    )
+  }
 }
 
 function deleteRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   key: string | number,
 ): void {
-  options.database.execute(
-    `DELETE FROM "${escapeIdentifier(options.tableName)}" WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
-    [key],
-  )
+  if (options.actorKeyColumn) {
+    const [id, actorId] = parseCompoundKey(String(key))
+    options.database.execute(
+      `DELETE FROM "${escapeIdentifier(options.tableName)}" WHERE "${escapeIdentifier(options.keyColumn)}" = ? AND "${escapeIdentifier(options.actorKeyColumn)}" = ?;`,
+      [id, actorId],
+    )
+  } else {
+    options.database.execute(
+      `DELETE FROM "${escapeIdentifier(options.tableName)}" WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
+      [key],
+    )
+  }
+}
+
+function parseCompoundKey(key: string): [string, string] {
+  const separatorIndex = key.indexOf('\0')
+  if (separatorIndex === -1) {
+    throw new Error(`Expected compound key with \\0 separator, got "${key}".`)
+  }
+  return [key.slice(0, separatorIndex), key.slice(separatorIndex + 1)]
 }
 
 function escapeIdentifier(identifier: string): string {
@@ -569,9 +607,15 @@ function buildIndexedSelectSql(
   range: SqliteQueryRangeState,
   direction: 'asc' | 'desc',
   limit?: number,
+  actorScope?: string,
 ): { sql: string; bind: unknown[] } {
   const whereClauses: string[] = []
   const bind: unknown[] = []
+
+  if (actorScope) {
+    whereClauses.push('("_actorId" = ? OR "_actorId" = \'server\')')
+    bind.push(actorScope)
+  }
 
   for (const equality of range.equals) {
     appendWhereClause(whereClauses, bind, equality.field, '=', equality.value)

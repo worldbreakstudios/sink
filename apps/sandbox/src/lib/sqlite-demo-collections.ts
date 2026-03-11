@@ -131,26 +131,29 @@ async function createSqliteDemoDatabase(): Promise<FrontendSqliteDatabase> {
 
   db.execute(
     `
-      INSERT INTO fields (_id, _createdAt, object_id, field_type_id, name, body)
+      INSERT INTO fields (_id, _actorId, _createdAt, object_id, field_type_id, name, body)
       VALUES
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?),
-        (?, ?, ?, ?, ?, ?);
+        (?, ?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?, ?, ?);
     `,
     [
       titleFieldId,
+      'server',
       titleFieldCreatedAt,
       inboxObjectId,
       textFieldTypeId,
       'title',
       'Welcome note title',
       bodyFieldId,
+      'server',
       bodyFieldCreatedAt,
       inboxObjectId,
       richTextFieldTypeId,
       'body',
       'Initial sandbox note body',
       statusFieldId,
+      'server',
       statusFieldCreatedAt,
       taskObjectId,
       statusFieldTypeId,

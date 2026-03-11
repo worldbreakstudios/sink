@@ -280,6 +280,10 @@ function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
   const normalizedName = column.name.toLowerCase()
   const normalizedType = column.type.toUpperCase()
 
+  if (normalizedName === '_actorid') {
+    return 'server'
+  }
+
   if (normalizedName === '_archivedat') {
     return null
   }

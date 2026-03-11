@@ -38,6 +38,9 @@ export function emit(definitions: TableDefinition[]): string {
   for (const def of definitions) {
     lines.push(`export interface ${rowTypeName(def.tableName)} {`)
     lines.push(`  _id: ${systemIdTsType(def.tableName)}`)
+    if (def.options.withActorId) {
+      lines.push('  _actorId: string')
+    }
     for (const field of getImplicitSystemFields(def)) {
       lines.push(`  ${field.name}: ${field.tsType}`)
     }
@@ -57,7 +60,13 @@ export function emit(definitions: TableDefinition[]): string {
   for (const def of definitions) {
     const constName = `SQL_CREATE_${def.tableName.toUpperCase()}`
     lines.push(`export const ${constName} = \`CREATE TABLE IF NOT EXISTS "${def.tableName}" (`)
-    const colDefs: string[] = ['  "_id" TEXT PRIMARY KEY']
+    const colDefs: string[] = []
+    if (def.options.withActorId) {
+      colDefs.push('  "_id" TEXT NOT NULL')
+      colDefs.push('  "_actorId" TEXT NOT NULL')
+    } else {
+      colDefs.push('  "_id" TEXT PRIMARY KEY')
+    }
     for (const field of getImplicitSystemFields(def)) {
       colDefs.push(`  "${field.name}" ${field.sqliteType}`)
     }
@@ -67,6 +76,9 @@ export function emit(definitions: TableDefinition[]): string {
         colDef += ` DEFAULT ${sqlLiteral(col.defaultValue)}`
       }
       colDefs.push(colDef)
+    }
+    if (def.options.withActorId) {
+      colDefs.push('  PRIMARY KEY ("_id", "_actorId")')
     }
     lines.push(colDefs.join(',\n'))
     lines.push(');\`')
@@ -160,8 +172,9 @@ export function emit(definitions: TableDefinition[]): string {
   // SchemaCollections interface
   lines.push('export interface SchemaCollections {')
   for (const def of definitions) {
+    const collectionKeyType = def.options.withActorId ? 'string' : systemIdTsType(def.tableName)
     lines.push(
-      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>`,
+      `  ${def.tableName}: SqliteCollection<${rowTypeName(def.tableName)}, ${collectionKeyType}, typeof INDEXES.${def.tableName}>`,
     )
   }
   lines.push('}')
@@ -174,13 +187,19 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push('  return {')
   for (const def of definitions) {
     const orderBy = def.options.orderBy
+    const collectionKeyType = def.options.withActorId ? 'string' : systemIdTsType(def.tableName)
     lines.push(
-      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
+      `    ${def.tableName}: createSqliteCollection<${rowTypeName(def.tableName)}, ${collectionKeyType}, typeof INDEXES.${def.tableName}>({`,
     )
     lines.push(`      id: 'sqlite-${def.tableName}',`)
     lines.push(`      tableName: '${def.tableName}',`)
     lines.push(`      keyColumn: '_id',`)
-    lines.push(`      getKey: (row) => row._id,`)
+    if (def.options.withActorId) {
+      lines.push(`      actorKeyColumn: '_actorId',`)
+      lines.push('      getKey: (row) => `${row._id}\\0${row._actorId}`,')
+    } else {
+      lines.push(`      getKey: (row) => row._id,`)
+    }
     lines.push(`      database: db,`)
     lines.push(`      indexes: INDEXES.${def.tableName},`)
     lines.push(`      referenceColumns: REFERENCE_COLUMNS.${def.tableName},`)
@@ -219,10 +238,12 @@ export function emit(definitions: TableDefinition[]): string {
     const rowIdType = systemIdTsType(def.tableName)
     const insertInputType = renderInsertInputType(def, rowType)
     const insertSystemFields = getInsertSystemFieldEntries(def, 'row')
+    const hasActor = !!def.options.withActorId
+    const actorOptionsParam = hasActor ? ', options: { actorId: string }' : ''
 
     // insertX (single)
     lines.push(
-      `export function insert${pascal(singular)}(collections: SchemaCollections, row: ${insertInputType}) {`,
+      `export function insert${pascal(singular)}(collections: SchemaCollections, row: ${insertInputType}${actorOptionsParam}) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
@@ -238,34 +259,66 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('')
 
     // updateX (single)
-    lines.push(
-      `export function update${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}, changes: Partial<Omit<${rowType}, '_id'>>) {`,
-    )
-    lines.push('  const tx = createBatchTransaction(collections)')
-    lines.push('  tx.mutate(() => {')
-    lines.push(
-      `    collections.${def.tableName}.update(_id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'changes')}) })`,
-    )
-    lines.push('  })')
-    lines.push('  return tx.isPersisted.promise')
-    lines.push('}')
+    if (hasActor) {
+      lines.push(
+        `export function update${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}, changes: Partial<Omit<${rowType}, '_id' | '_actorId'>>, options: { actorId: string }) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push(
+        `    const compoundKey = \`\${_id}\\0\${options.actorId}\``,
+      )
+      lines.push(
+        `    collections.${def.tableName}.update(compoundKey as any, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'changes')}) })`,
+      )
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    } else {
+      lines.push(
+        `export function update${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}, changes: Partial<Omit<${rowType}, '_id'>>) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push(
+        `    collections.${def.tableName}.update(_id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'changes')}) })`,
+      )
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    }
     lines.push('')
 
     // deleteX (single)
-    lines.push(
-      `export function delete${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}) {`,
-    )
-    lines.push('  const tx = createBatchTransaction(collections)')
-    lines.push('  tx.mutate(() => {')
-    lines.push(`    collections.${def.tableName}.delete(_id)`)
-    lines.push('  })')
-    lines.push('  return tx.isPersisted.promise')
-    lines.push('}')
+    if (hasActor) {
+      lines.push(
+        `export function delete${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}, options: { actorId: string }) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push(
+        `    const compoundKey = \`\${_id}\\0\${options.actorId}\``,
+      )
+      lines.push(`    collections.${def.tableName}.delete(compoundKey as any)`)
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    } else {
+      lines.push(
+        `export function delete${pascal(singular)}(collections: SchemaCollections, _id: ${rowIdType}) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push(`    collections.${def.tableName}.delete(_id)`)
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    }
     lines.push('')
 
     // insertXs (batch)
     lines.push(
-      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Array<${insertInputType}>) {`,
+      `export function insert${pascal(plural)}(collections: SchemaCollections, rows: Array<${insertInputType}>${actorOptionsParam}) {`,
     )
     lines.push('  const tx = createBatchTransaction(collections)')
     lines.push('  tx.mutate(() => {')
@@ -283,34 +336,80 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('')
 
     // updateXs (batch)
-    lines.push(
-      `export function update${pascal(plural)}(collections: SchemaCollections, updates: Array<{ _id: ${rowIdType}; changes: Partial<Omit<${rowType}, '_id'>> }>) {`,
-    )
-    lines.push('  const tx = createBatchTransaction(collections)')
-    lines.push('  tx.mutate(() => {')
-    lines.push('    for (const u of updates) {')
-    lines.push(
-      `      collections.${def.tableName}.update(u._id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'u.changes')}) })`,
-    )
-    lines.push('    }')
-    lines.push('  })')
-    lines.push('  return tx.isPersisted.promise')
-    lines.push('}')
+    if (hasActor) {
+      lines.push(
+        `export function update${pascal(plural)}(collections: SchemaCollections, updates: Array<{ _id: ${rowIdType}; changes: Partial<Omit<${rowType}, '_id' | '_actorId'>> }>, options: { actorId: string }) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push('    for (const u of updates) {')
+      lines.push(
+        `      const compoundKey = \`\${u._id}\\0\${options.actorId}\``,
+      )
+      lines.push(
+        `      collections.${def.tableName}.update(compoundKey as any, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'u.changes')}) })`,
+      )
+      lines.push('    }')
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    } else {
+      lines.push(
+        `export function update${pascal(plural)}(collections: SchemaCollections, updates: Array<{ _id: ${rowIdType}; changes: Partial<Omit<${rowType}, '_id'>> }>) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push('    for (const u of updates) {')
+      lines.push(
+        `      collections.${def.tableName}.update(u._id, (draft) => { Object.assign(draft, ${renderUpdateAssignment(def, 'u.changes')}) })`,
+      )
+      lines.push('    }')
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    }
     lines.push('')
 
     // deleteXs (batch)
-    lines.push(
-      `export function delete${pascal(plural)}(collections: SchemaCollections, ids: ${rowIdType}[]) {`,
-    )
-    lines.push('  const tx = createBatchTransaction(collections)')
-    lines.push('  tx.mutate(() => {')
-    lines.push('    for (const _id of ids) {')
-    lines.push(`      collections.${def.tableName}.delete(_id)`)
-    lines.push('    }')
-    lines.push('  })')
-    lines.push('  return tx.isPersisted.promise')
-    lines.push('}')
+    if (hasActor) {
+      lines.push(
+        `export function delete${pascal(plural)}(collections: SchemaCollections, ids: ${rowIdType}[], options: { actorId: string }) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push('    for (const _id of ids) {')
+      lines.push(
+        `      const compoundKey = \`\${_id}\\0\${options.actorId}\``,
+      )
+      lines.push(`      collections.${def.tableName}.delete(compoundKey as any)`)
+      lines.push('    }')
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    } else {
+      lines.push(
+        `export function delete${pascal(plural)}(collections: SchemaCollections, ids: ${rowIdType}[]) {`,
+      )
+      lines.push('  const tx = createBatchTransaction(collections)')
+      lines.push('  tx.mutate(() => {')
+      lines.push('    for (const _id of ids) {')
+      lines.push(`      collections.${def.tableName}.delete(_id)`)
+      lines.push('    }')
+      lines.push('  })')
+      lines.push('  return tx.isPersisted.promise')
+      lines.push('}')
+    }
     lines.push('')
+
+    // queryX (actor-scoped query helper)
+    if (hasActor) {
+      lines.push(
+        `export function query${pascal(plural)}(collections: SchemaCollections, actorId: string) {`,
+      )
+      lines.push(`  return collections.${def.tableName}.query({ actorId })`)
+      lines.push('}')
+      lines.push('')
+    }
   }
 
   return lines.join('\n')
@@ -404,6 +503,10 @@ function getImplicitSystemFields(def: TableDefinition): Array<{
 function getInsertSystemFieldEntries(def: TableDefinition, sourceName: string): string[] {
   const fields = [`_id: createId<'${def.tableName}'>()`]
 
+  if (def.options.withActorId) {
+    fields.push(`_actorId: options.actorId`)
+  }
+
   if (def.options.withCreatedAt) {
     fields.push(`_createdAt: ${sourceName}._createdAt ?? currentTimestamp()`)
   }
@@ -421,13 +524,18 @@ function getInsertSystemFieldEntries(def: TableDefinition, sourceName: string): 
 
 function renderInsertInputType(def: TableDefinition, rowType: string): string {
   const systemFieldNames = getImplicitSystemFields(def).map((field) => `'${field.name}'`)
+  const omitFields = ["'_id'"]
+
+  if (def.options.withActorId) {
+    omitFields.push("'_actorId'")
+  }
 
   if (systemFieldNames.length === 0) {
-    return `Omit<${rowType}, '_id'>`
+    return `Omit<${rowType}, ${omitFields.join(' | ')}>`
   }
 
   const systemFieldsUnion = systemFieldNames.join(' | ')
-  return `Omit<${rowType}, '_id' | ${systemFieldsUnion}> & Partial<Pick<${rowType}, ${systemFieldsUnion}>>`
+  return `Omit<${rowType}, ${omitFields.join(' | ')} | ${systemFieldsUnion}> & Partial<Pick<${rowType}, ${systemFieldsUnion}>>`
 }
 
 function renderUpdateAssignment(def: TableDefinition, sourceName: string): string {
@@ -444,6 +552,7 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
   unique: boolean
   createSql: string | null
 }> {
+  const hasActor = !!def.options.withActorId
   const indexes: Array<{
     name: string
     fields: readonly string[]
@@ -452,21 +561,38 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
   }> = [
     {
       name: 'by_id',
-      fields: ['_id'],
-      unique: true,
-      createSql: null,
+      fields: hasActor ? ['_id', '_actorId'] : ['_id'],
+      unique: hasActor,
+      createSql: hasActor ? null : null,
     },
   ]
 
+  if (hasActor) {
+    indexes.push({
+      name: 'by_actor_id',
+      fields: ['_actorId', '_id'],
+      unique: false,
+      createSql: createIndexSql(
+        def.tableName,
+        'by_actor_id',
+        ['_actorId', '_id'],
+        false,
+      ),
+    })
+  }
+
   if (def.options.withCreatedAt) {
+    const fields = hasActor
+      ? ['_actorId', '_createdAt', '_id']
+      : ['_createdAt', '_id']
     indexes.push({
       name: 'by_creation_time',
-      fields: ['_createdAt', '_id'],
+      fields,
       unique: false,
       createSql: createIndexSql(
         def.tableName,
         'by_creation_time',
-        ['_createdAt', '_id'],
+        fields,
         false,
       ),
     })
@@ -474,9 +600,12 @@ function getGeneratedIndexes(def: TableDefinition): Array<{
 
   for (const index of def.indexes) {
     const tieBreaker = def.options.withCreatedAt ? '_createdAt' : '_id'
-    const indexFields = index.unique
+    const baseFields = index.unique
       ? [...index.fields]
       : [...index.fields, tieBreaker]
+    const indexFields = hasActor && !baseFields.includes('_actorId')
+      ? ['_actorId', ...baseFields]
+      : baseFields
     indexes.push({
       name: index.name,
       fields: indexFields,

@@ -36,12 +36,13 @@ export interface TableIndexDefinition<
 export const RESERVED_SYSTEM_FIELD_NAMES = [
   'id',
   '_id',
+  '_actorId',
   '_createdAt',
   '_updatedAt',
   '_archivedAt',
 ] as const
 
-export const RESERVED_INDEX_NAMES = ['by_id', 'by_creation_time'] as const
+export const RESERVED_INDEX_NAMES = ['by_id', 'by_creation_time', 'by_actor_id'] as const
 
 type RegisteredSchemaTableName = keyof RegisteredSchemaTables extends never
   ? string
@@ -152,6 +153,7 @@ export const v = {
 
 export interface TableDefinitionOptions {
   orderBy?: string
+  withActorId?: boolean
   withCreatedAt?: boolean
   withUpdatedAt?: boolean
   withArchivedAt?: boolean
@@ -183,6 +185,7 @@ export interface TableDefinition<
     name: string,
     options: TableIndexOptions,
   ): TableDefinition<TColumns>
+  withActorId(enabled?: boolean): TableDefinition<TColumns>
   withCreatedAt(enabled?: boolean): TableDefinition<TColumns>
   withUpdatedAt(enabled?: boolean): TableDefinition<TColumns>
   withArchivedAt(enabled?: boolean): TableDefinition<TColumns>
@@ -192,6 +195,10 @@ export function getImplicitSystemFields(
   options: TableDefinitionOptions,
 ): readonly string[] {
   const fields = ['_id']
+
+  if (options.withActorId) {
+    fields.push('_actorId')
+  }
 
   if (options.withCreatedAt) {
     fields.push('_createdAt')
@@ -274,6 +281,12 @@ function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<
         options,
         [...indexes, normalizeIndexDefinition(name, fieldsOrOptions, true)],
       )
+    },
+    withActorId(enabled = true) {
+      return createTableDefinition(tableName, columns, {
+        ...options,
+        withActorId: enabled,
+      }, indexes)
     },
     withCreatedAt(enabled = true) {
       return createTableDefinition(tableName, columns, {

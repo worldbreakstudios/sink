@@ -80,12 +80,6 @@ function validateIndexes(def: TableDefinition): void {
         )
       }
 
-      if (field.startsWith('_')) {
-        throw new Error(
-          `Table "${def.tableName}" index "${index.name}" cannot index reserved field "${field}".`,
-        )
-      }
-
       const [topLevelField] = field.split('.')
 
       if (!topLevelField || !effectiveFields.has(topLevelField)) {
@@ -94,7 +88,9 @@ function validateIndexes(def: TableDefinition): void {
         )
       }
 
+      const isAllowedSystemField = effectiveFields.has(field) && field.startsWith('_')
       if (
+        !isAllowedSystemField &&
         RESERVED_SYSTEM_FIELD_NAMES.includes(
           topLevelField as (typeof RESERVED_SYSTEM_FIELD_NAMES)[number],
         )

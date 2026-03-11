@@ -11,5 +11,6 @@ export default defineTable(
   { orderBy: '_createdAt ASC' },
 )
   .withCreatedAt(true)
+  .withActorId(true)
   .index('by_object_id', ['object_id'])
-  .uniqueIndex('by_object_id_field_type', ['object_id', 'field_type_id'])
+  .uniqueIndex('by_object_id_field_type', ['object_id', 'field_type_id', '_actorId', '_createdAt'])

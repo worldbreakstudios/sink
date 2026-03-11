@@ -247,13 +247,13 @@ function App() {
         }
 
         const rows = workspace.collections.fields
-          .query()
-          .withIndex('by_object_id', (q) => q.eq('object_id', firstField.object_id))
+          .query({ actorId: 'server' })
+          .withIndex('by_object_id', (q) => q.eq('_actorId', 'server').eq('object_id', firstField.object_id))
           .take(5)
 
         return {
           title: 'by_object_id',
-          query: `fields.query().withIndex('by_object_id', (q) => q.eq('object_id', '${firstField.object_id}')).take(5)`,
+          query: `fields.query({ actorId: 'server' }).withIndex('by_object_id', (q) => q.eq('_actorId', 'server').eq('object_id', '${firstField.object_id}')).take(5)`,
           rows,
         }
       }
