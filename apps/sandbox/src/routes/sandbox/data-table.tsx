@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
-import type { SqliteIndexDefinition } from '@sink/lib'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useHotkey } from '@tanstack/react-hotkeys'
+import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/ui/code-block'
 import { Input } from '@/components/ui/input'
@@ -19,11 +20,19 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { SchemaCollections, TableName } from '@/data/generated/schema.gen'
-import { INDEXES } from '@/data/generated/schema.gen'
+import { INDEXES, REFERENCE_COLUMNS } from '@/data/generated/schema.gen'
 import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
+import { CellActionMenu } from './cell-action-menu'
 import { formatCellValue, getRowValue, isMultilineColumn } from './utils'
+import { ValueViewerModal } from './value-viewer-modal'
 
 const DEFAULT_COLUMN_WIDTH = 150
 const MIN_COLUMN_WIDTH = 50
@@ -64,47 +73,6 @@ function saveHistory(history: HistoryEntry[]): void {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, MAX_HISTORY_ITEMS)))
   } catch {}
-}
-
-function ReadOnlyCell({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('Failed to copy:', err)
-    }
-  }, [value])
-
-  return (
-    <div className="group/cell flex items-center gap-1">
-      <span className="truncate text-muted-foreground">{value}</span>
-      <button
-        type="button"
-        onClick={handleCopy}
-        className={cn(
-          'shrink-0 rounded p-0.5',
-          'hover:bg-muted',
-          copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground hover:text-foreground',
-        )}
-        aria-label="Copy value"
-      >
-        {copied ? (
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        ) : (
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-          </svg>
-        )}
-      </button>
-    </div>
-  )
 }
 
 interface TableLayout {
@@ -173,6 +141,43 @@ function formatTimestamp(timestamp: number): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+function getColumnValidator(
+  columnName: string,
+  column: { name: string; type: string; notnull?: number; pk?: number },
+  referenceColumns: Record<string, SqliteReferenceColumn>,
+): string {
+  // System columns
+  if (columnName === '_id') return 'v.id()'
+  if (columnName === '_createdAt') return 'v.number()'
+  if (columnName === '_updatedAt') return 'v.optional(v.number())'
+  if (columnName === '_archivedAt') return 'v.optional(v.number())'
+
+  const ref = referenceColumns[columnName]
+  if (ref) {
+    return ref.enforceExists
+      ? `v.id('${ref.referencedTable}', { enforceExists: true })`
+      : `v.id('${ref.referencedTable}')`
+  }
+
+  const sqlType = column.type.toUpperCase()
+  let validator: string
+  if (sqlType.includes('INT')) {
+    validator = 'v.number()'
+  } else if (sqlType.includes('REAL') || sqlType.includes('FLOAT') || sqlType.includes('DOUBLE')) {
+    validator = 'v.number()'
+  } else if (sqlType.includes('BOOL')) {
+    validator = 'v.boolean()'
+  } else {
+    validator = 'v.string()'
+  }
+
+  if (column.notnull === 0 && column.pk === 0) {
+    validator = `v.optional(${validator})`
+  }
+
+  return validator
+}
+
 export interface QueryState {
   indexName: string
   constraints: Constraint[]
@@ -196,16 +201,33 @@ export function DataTable({
   onCellEdit,
   onAddRow,
   onRunQuery,
+  selectedRowId,
+  onSelectRow,
 }: {
   tableName: string
-  columns: { name: string; pk?: number }[]
+  columns: { name: string; type: string; pk?: number; notnull?: number }[]
   rows: SqliteDemoRow[]
   collections: SchemaCollections | null
   queryResult: QueryResult | null
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
   onRunQuery: (query: QueryState) => Promise<void>
+  selectedRowId: SqliteDemoId | null
+  onSelectRow: (rowId: SqliteDemoId | null) => void
 }) {
+  // Get reference columns for validator display
+  const referenceColumns = useMemo(() => {
+    return (REFERENCE_COLUMNS[tableName as TableName] ?? {}) as Record<string, SqliteReferenceColumn>
+  }, [tableName])
+
+  // Create a map from column name to column info for quick lookup
+  const columnInfoMap = useMemo(() => {
+    const map: Record<string, { name: string; type: string; pk?: number; notnull?: number }> = {}
+    for (const col of columns) {
+      map[col.name] = col
+    }
+    return map
+  }, [columns])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
     columnName: string
@@ -228,6 +250,9 @@ export function DataTable({
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
 
+  // Value viewer modal state
+  const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
+
   // Display either query results or default rows
   const displayRows = queryResult?.rows ?? rows
   const isFiltered = queryResult !== null
@@ -249,6 +274,17 @@ export function DataTable({
   }, [tableName])
 
   const indexNames = useMemo(() => Object.keys(tableIndexes), [tableIndexes])
+
+  // Get all fields that are part of any index (for filter menu)
+  const allIndexFields = useMemo(() => {
+    const fields = new Set<string>()
+    for (const index of Object.values(tableIndexes)) {
+      for (const field of index.fields) {
+        fields.add(field)
+      }
+    }
+    return fields
+  }, [tableIndexes])
 
   const indexFields = useMemo(() => {
     if (!selectedIndex || !tableIndexes[selectedIndex]) return []
@@ -494,6 +530,21 @@ export function DataTable({
     setQueryMethod('collect')
     setTakeCount('10')
   }, [])
+
+  // Prefill filter from cell action menu
+  const handlePrefillFilter = useCallback((field: string, operator: Operator, value: string) => {
+    // Find an index that contains this field
+    const indexName = Object.entries(tableIndexes).find(
+      ([, def]) => def.fields.includes(field)
+    )?.[0]
+
+    if (indexName) {
+      setSelectedIndex(indexName)
+      setConstraints([{ field, operator, value }])
+      setFilterOpen(true)
+      setActiveTab('filters')
+    }
+  }, [tableIndexes])
 
   const restoreFromHistory = useCallback((entry: HistoryEntry) => {
     setSelectedIndex(entry.indexName)
@@ -876,7 +927,18 @@ export function DataTable({
                       minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
                     }}
                   >
-                    {columnName}
+                    <TooltipProvider delayDuration={300}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help">{columnName}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="font-mono text-xs">
+                          {columnInfoMap[columnName]
+                            ? getColumnValidator(columnName, columnInfoMap[columnName], referenceColumns)
+                            : 'unknown'}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                     <div
                       onMouseDown={(e) => handleResizeStart(e, columnName)}
                       className={cn(
@@ -892,9 +954,17 @@ export function DataTable({
             <TableBody>
               {displayRows.map((row) => {
                 const rowId = row._id
+                const isSelected = selectedRowId === rowId
 
                 return (
-                  <TableRow key={`${tableName}-${rowId}`} className="group">
+                  <TableRow
+                    key={`${tableName}-${rowId}`}
+                    className={cn(
+                      'group cursor-pointer',
+                      isSelected && 'bg-accent',
+                    )}
+                    onClick={() => onSelectRow(isSelected ? null : rowId)}
+                  >
                     {columnNames.map((columnName) => (
                       <TableCell
                         key={`${tableName}-${rowId}-${columnName}`}
@@ -949,22 +1019,37 @@ export function DataTable({
                               className="h-7 text-xs"
                             />
                           )
-                        ) : readOnlyColumns.has(columnName) ? (
-                          <ReadOnlyCell value={formatCellValue(getRowValue(row, columnName))} />
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEditingCell({
-                                rowId,
-                                columnName,
-                                value: formatCellValue(getRowValue(row, columnName)),
-                              })
-                            }
-                            className="block w-full truncate text-left hover:text-primary"
-                          >
-                            {formatCellValue(getRowValue(row, columnName))}
-                          </button>
+                          <div className="group/cell flex items-center justify-between gap-1">
+                            <span className={cn(
+                              'truncate',
+                              readOnlyColumns.has(columnName) && 'text-muted-foreground',
+                            )}>
+                              {formatCellValue(getRowValue(row, columnName))}
+                            </span>
+                            <CellActionMenu
+                              value={formatCellValue(getRowValue(row, columnName))}
+                              columnName={columnName}
+                              isReadOnly={readOnlyColumns.has(columnName)}
+                              canFilter={allIndexFields.has(columnName)}
+                              onEdit={() =>
+                                setEditingCell({
+                                  rowId,
+                                  columnName,
+                                  value: formatCellValue(getRowValue(row, columnName)),
+                                })
+                              }
+                              onView={() =>
+                                setViewerModal({
+                                  columnName,
+                                  value: formatCellValue(getRowValue(row, columnName)),
+                                })
+                              }
+                              onFilter={(operator, value) =>
+                                handlePrefillFilter(columnName, operator, value)
+                              }
+                            />
+                          </div>
                         )}
                       </TableCell>
                     ))}
@@ -975,6 +1060,14 @@ export function DataTable({
           </Table>
         )}
       </div>
+
+      {/* Value Viewer Modal */}
+      <ValueViewerModal
+        open={viewerModal !== null}
+        onClose={() => setViewerModal(null)}
+        columnName={viewerModal?.columnName ?? ''}
+        value={viewerModal?.value ?? ''}
+      />
     </div>
   )
 }

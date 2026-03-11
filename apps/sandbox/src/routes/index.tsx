@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
-import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot } from '@sink/lib'
+import { HotkeysProvider } from '@tanstack/react-hotkeys'
+import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot, SqliteReferenceColumn } from '@sink/lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
   createSqliteDemoCollectionsWorkspace,
   type SqliteDemoCollectionsWorkspace,
@@ -44,6 +46,7 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
+  const [selectedRowId, setSelectedRowId] = useState<SqliteDemoId | null>(null)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -123,10 +126,23 @@ function App() {
     }
   }, [selectedTableName, tables])
 
-  // Clear query result when table changes
+  // Clear query result and selected row when table changes
   useEffect(() => {
     setQueryResult(null)
+    setSelectedRowId(null)
   }, [selectedTableName])
+
+  // Get the selected row
+  const selectedRow = useMemo(() => {
+    if (!selectedRowId) return null
+    return selectedRows.find((r) => r._id === selectedRowId) ?? null
+  }, [selectedRowId, selectedRows])
+
+  // Get reference columns for the current table
+  const tableReferenceColumns = useMemo(() => {
+    if (!selectedTable) return {}
+    return (REFERENCE_COLUMNS[selectedTable.name as TableName] ?? {}) as Record<string, SqliteReferenceColumn>
+  }, [selectedTable])
 
   // Load indexes for selected table
   useEffect(() => {
@@ -311,6 +327,7 @@ function App() {
 
 
   return (
+    <HotkeysProvider>
     <div className="flex h-screen flex-col bg-background">
       {/* Top Header Bar */}
       <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
@@ -382,6 +399,8 @@ function App() {
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
             onRunQuery={handleRunQuery}
+            selectedRowId={selectedRowId}
+            onSelectRow={setSelectedRowId}
           />
 
           {/* Right Sidebar - Schema/Indexes */}
@@ -391,6 +410,9 @@ function App() {
             indexes={selectedTableIndexes}
             isOpen={rightSidebarOpen}
             onClose={() => setRightSidebarOpen(false)}
+            selectedRow={selectedRow}
+            columns={selectedTable.columns}
+            referenceColumns={tableReferenceColumns}
           />
         </div>
       )}
@@ -409,5 +431,6 @@ function App() {
         onClose={() => setCreateTableModalOpen(false)}
       />
     </div>
+    </HotkeysProvider>
   )
 }

@@ -1,10 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import type { SqliteIndexSnapshot, SqliteTableSnapshot } from '@sink/lib'
+import type { SqliteIndexSnapshot, SqliteReferenceColumn, SqliteTableSnapshot } from '@sink/lib'
 import { CodeBlock } from '@/components/ui/code-block'
 import { getSchemaSource } from '@/lib/schema-sources'
+import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
+import { DocumentPreviewPanel } from './document-preview-panel'
 
-type TabType = 'schema' | 'indexes'
+type TabType = 'schema' | 'indexes' | 'document'
 
 const MIN_WIDTH = 200
 const MAX_WIDTH = 600
@@ -16,14 +18,27 @@ export function RightSidebar({
   indexes,
   isOpen,
   onClose,
+  selectedRow,
+  columns,
+  referenceColumns,
 }: {
   tableName: string
   tables: SqliteTableSnapshot[]
   indexes: SqliteIndexSnapshot[]
   isOpen: boolean
   onClose: () => void
+  selectedRow?: SqliteDemoRow | null
+  columns?: { name: string; type: string; pk?: number; notnull?: number }[]
+  referenceColumns?: Record<string, SqliteReferenceColumn>
 }) {
   const [activeTab, setActiveTab] = useState<TabType>('schema')
+
+  // Auto-switch to document tab when a row is selected
+  useEffect(() => {
+    if (selectedRow) {
+      setActiveTab('document')
+    }
+  }, [selectedRow])
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLElement>(null)
@@ -77,8 +92,10 @@ export function RightSidebar({
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-medium">
-          {activeTab === 'schema' ? 'Schema' : 'Indexes'} for table{' '}
-          <span className="font-semibold">{tableName}</span>
+          {activeTab === 'document' ? 'Document Preview' : activeTab === 'schema' ? 'Schema' : 'Indexes'}{' '}
+          {activeTab !== 'document' && (
+            <>for table <span className="font-semibold">{tableName}</span></>
+          )}
         </h2>
         <button
           type="button"
@@ -105,11 +122,25 @@ export function RightSidebar({
 
       {/* Tabs */}
       <div className="flex border-b">
+        {selectedRow && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('document')}
+            className={cn(
+              'flex-1 px-3 py-2 text-sm font-medium transition-colors',
+              activeTab === 'document'
+                ? 'border-b-2 border-primary text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            Document
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setActiveTab('schema')}
           className={cn(
-            'flex-1 px-4 py-2 text-sm font-medium transition-colors',
+            'flex-1 px-3 py-2 text-sm font-medium transition-colors',
             activeTab === 'schema'
               ? 'border-b-2 border-primary text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -121,7 +152,7 @@ export function RightSidebar({
           type="button"
           onClick={() => setActiveTab('indexes')}
           className={cn(
-            'flex-1 px-4 py-2 text-sm font-medium transition-colors',
+            'flex-1 px-3 py-2 text-sm font-medium transition-colors',
             activeTab === 'indexes'
               ? 'border-b-2 border-primary text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -133,7 +164,13 @@ export function RightSidebar({
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
-        {activeTab === 'schema' ? (
+        {activeTab === 'document' && selectedRow && columns && referenceColumns ? (
+          <DocumentPreviewPanel
+            row={selectedRow}
+            columns={columns}
+            referenceColumns={referenceColumns}
+          />
+        ) : activeTab === 'schema' ? (
           <SchemaPanel schemaSource={schemaSource} tableName={tableName} />
         ) : (
           <IndexesPanel indexes={indexes} />
