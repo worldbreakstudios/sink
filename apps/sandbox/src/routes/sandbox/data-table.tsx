@@ -260,7 +260,19 @@ export function DataTable({
     return !!tableIndexes[selectedIndex].unique
   }, [selectedIndex, tableIndexes])
 
-  // When unique mode is selected, auto-populate all index fields
+  // When a unique index is selected, pre-populate all fields as constraints
+  useEffect(() => {
+    if (isUniqueIndex && indexFields.length > 0) {
+      const uniqueConstraints: Constraint[] = indexFields.map((field) => ({
+        field,
+        operator: 'eq' as Operator,
+        value: '',
+      }))
+      setConstraints(uniqueConstraints)
+    }
+  }, [isUniqueIndex, indexFields])
+
+  // When unique query method is selected, ensure all index fields are constrained
   useEffect(() => {
     if (queryMethod === 'unique' && indexFields.length > 0) {
       const uniqueConstraints: Constraint[] = indexFields.map((field) => ({

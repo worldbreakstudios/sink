@@ -195,6 +195,18 @@ function CopyButton({ text }: { text: string }) {
 function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
   const regularIndexes = indexes.filter((idx) => !idx.name.startsWith('sqlite_'))
 
+  // Primary key index (implicit, always exists)
+  const pkIndex: SqliteIndexSnapshot = {
+    name: 'by_id',
+    tableName: '',
+    unique: 1,
+    origin: 'pk',
+    partial: 0,
+    fields: ['_id'],
+  }
+
+  const allIndexes = [pkIndex, ...regularIndexes]
+
   return (
     <div className="space-y-4">
       {/* Database Indexes */}
@@ -220,33 +232,32 @@ function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
           <span className="text-sm font-medium">Indexes</span>
         </div>
 
-        {regularIndexes.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {indexes.length === 0 ? 'No indexes on this table.' : 'No custom indexes.'}
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {regularIndexes.map((index) => (
-              <div key={index.name} className="group rounded-md border bg-card p-3">
-                <div className="mb-1 flex items-start justify-between gap-1">
-                  <span className="break-all font-mono text-sm">{index.name}</span>
-                  <CopyButton text={index.name} />
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <span className="font-medium">Fields:</span>{' '}
-                  {index.fields.join(', ') || '(none)'}
-                </div>
+        <div className="space-y-3">
+          {allIndexes.map((index) => (
+            <div key={index.name} className="group rounded-md border bg-card p-3">
+              <div className="mb-1 flex items-start justify-between gap-1">
+                <span className="break-all font-mono text-sm">{index.name}</span>
+                <CopyButton text={index.name} />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                <span className="font-medium">Fields:</span>{' '}
+                {index.fields.join(', ') || '(none)'}
+              </div>
+              <div className="mt-1 flex gap-1">
                 {!!index.unique && (
-                  <div className="mt-1">
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                      unique
-                    </span>
-                  </div>
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                    unique
+                  </span>
+                )}
+                {index.origin === 'pk' && (
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                    primary key
+                  </span>
                 )}
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
