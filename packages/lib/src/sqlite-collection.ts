@@ -383,17 +383,139 @@ async function applyMutation<TRow extends object>(
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
 ): Promise<void> {
+  const snapshotQuery = buildMutationSnapshotQuery(options, mutation.key)
+  const beforeRows = await queryMutationRows(options.database, snapshotQuery)
+
   switch (mutation.type) {
     case 'insert':
       await insertRow(options, mutation.modified, columnNames)
-      return
+      break
     case 'update':
       await updateRow(options, mutation, columnNames)
-      return
+      break
     case 'delete':
       await deleteRow(options, mutation.key)
-      return
+      break
   }
+
+  const afterRows = await queryMutationRows(options.database, snapshotQuery)
+  logMutationDiff(options, mutation, snapshotQuery, beforeRows, afterRows)
+}
+
+interface MutationSnapshotQuery {
+  sql: string
+  whereClause: string
+  bind: Array<string | number>
+}
+
+interface MutationRowDiff {
+  rowIndex: number
+  changeType: 'inserted' | 'updated' | 'deleted' | 'unchanged'
+  changes: Record<string, { before: unknown; after: unknown }>
+}
+
+function buildMutationSnapshotQuery<TRow extends object>(
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  key: string | number,
+): MutationSnapshotQuery {
+  const escapedTableName = escapeIdentifier(options.tableName)
+  const escapedKeyColumn = escapeIdentifier(options.keyColumn)
+  const whereClause = `WHERE "${escapedKeyColumn}" = ?`
+
+  return {
+    sql: `SELECT * FROM "${escapedTableName}" ${whereClause} ORDER BY "${escapedKeyColumn}" ASC;`,
+    whereClause,
+    bind: [key],
+  }
+}
+
+async function queryMutationRows(
+  database: AsyncSqliteDatabase,
+  snapshotQuery: MutationSnapshotQuery,
+): Promise<Array<Record<string, unknown>>> {
+  return database.query<Record<string, unknown>>(
+    snapshotQuery.sql,
+    snapshotQuery.bind,
+  )
+}
+
+function logMutationDiff<TRow extends object>(
+  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  mutation: PendingMutation<TRow>,
+  snapshotQuery: MutationSnapshotQuery,
+  beforeRows: Array<Record<string, unknown>>,
+  afterRows: Array<Record<string, unknown>>,
+): void {
+  const rowDiffs = buildMutationRowDiffs(beforeRows, afterRows)
+  console.dir(
+    {
+      tableName: options.tableName,
+      mutationType: mutation.type,
+      keyColumn: options.keyColumn,
+      key: mutation.key,
+      snapshotSql: snapshotQuery.sql,
+      whereClause: snapshotQuery.whereClause,
+      whereBind: snapshotQuery.bind,
+      rowDiffs,
+    },
+    { depth: null },
+  )
+}
+
+function buildMutationRowDiffs(
+  beforeRows: Array<Record<string, unknown>>,
+  afterRows: Array<Record<string, unknown>>,
+): MutationRowDiff[] {
+  const rowCount = Math.max(beforeRows.length, afterRows.length)
+  const diffs: MutationRowDiff[] = []
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const beforeRow = beforeRows[rowIndex]
+    const afterRow = afterRows[rowIndex]
+    const changes = diffRowValues(beforeRow, afterRow)
+
+    diffs.push({
+      rowIndex,
+      changeType:
+        beforeRow === undefined
+          ? 'inserted'
+          : afterRow === undefined
+            ? 'deleted'
+            : Object.keys(changes).length === 0
+              ? 'unchanged'
+              : 'updated',
+      changes,
+    })
+  }
+
+  return diffs
+}
+
+function diffRowValues(
+  beforeRow: Record<string, unknown> | undefined,
+  afterRow: Record<string, unknown> | undefined,
+): Record<string, { before: unknown; after: unknown }> {
+  const changes: Record<string, { before: unknown; after: unknown }> = {}
+  const keys = new Set([
+    ...Object.keys(beforeRow ?? {}),
+    ...Object.keys(afterRow ?? {}),
+  ])
+
+  for (const key of keys) {
+    const beforeValue = beforeRow?.[key]
+    const afterValue = afterRow?.[key]
+
+    if (Object.is(beforeValue, afterValue)) {
+      continue
+    }
+
+    changes[key] = {
+      before: beforeValue,
+      after: afterValue,
+    }
+  }
+
+  return changes
 }
 
 async function insertRow<TRow extends object>(
