@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import { HotkeysProvider } from '@tanstack/react-hotkeys'
-import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot, SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot } from '@sink/lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
   createSqliteDemoCollectionsWorkspace,
   type SqliteDemoCollectionsWorkspace,
@@ -13,6 +12,8 @@ import {
   type SqliteDemoRow,
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
+import type { SqliteReferenceColumn } from '@sink/lib'
+import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
   CreateTableModal,
   DataTable,
@@ -46,7 +47,7 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
-  const [selectedRowId, setSelectedRowId] = useState<SqliteDemoId | null>(null)
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -112,10 +113,26 @@ function App() {
     [selectedCollection],
   )
 
-  const selectedRows = useMemo(
+  const tableRows = useMemo(
     () => (selectedRowsQuery.data ?? []) as SqliteDemoRow[],
     [selectedRowsQuery.data],
   )
+
+  // Get the actual selected document objects from the IDs
+  const selectedDocuments = useMemo(() => {
+    if (selectedRowIds.size === 0) return []
+    return tableRows.filter((row) => selectedRowIds.has(row._id))
+  }, [tableRows, selectedRowIds])
+
+  const handleSelectionChange = useCallback((ids: Set<SqliteDemoId>) => {
+    setSelectedRowIds(ids)
+  }, [])
+
+  // Get reference columns for the selected table
+  const selectedTableReferenceColumns = useMemo(() => {
+    if (!selectedTable) return {}
+    return (REFERENCE_COLUMNS[selectedTable.name as TableName] ?? {}) as Record<string, SqliteReferenceColumn>
+  }, [selectedTable])
 
   useEffect(() => {
     if (
@@ -126,23 +143,10 @@ function App() {
     }
   }, [selectedTableName, tables])
 
-  // Clear query result and selected row when table changes
+  // Clear query result when table changes
   useEffect(() => {
     setQueryResult(null)
-    setSelectedRowId(null)
   }, [selectedTableName])
-
-  // Get the selected row
-  const selectedRow = useMemo(() => {
-    if (!selectedRowId) return null
-    return selectedRows.find((r) => r._id === selectedRowId) ?? null
-  }, [selectedRowId, selectedRows])
-
-  // Get reference columns for the current table
-  const tableReferenceColumns = useMemo(() => {
-    if (!selectedTable) return {}
-    return (REFERENCE_COLUMNS[selectedTable.name as TableName] ?? {}) as Record<string, SqliteReferenceColumn>
-  }, [selectedTable])
 
   // Load indexes for selected table
   useEffect(() => {
@@ -393,26 +397,25 @@ function App() {
           <DataTable
             tableName={selectedTable.name}
             columns={selectedTable.columns}
-            rows={selectedRows}
+            rows={tableRows}
             collections={workspace?.collections ?? null}
             queryResult={queryResult}
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
             onRunQuery={handleRunQuery}
-            selectedRowId={selectedRowId}
-            onSelectRow={setSelectedRowId}
+            onSelectionChange={handleSelectionChange}
           />
 
-          {/* Right Sidebar - Schema/Indexes */}
+          {/* Right Sidebar - Schema/Indexes/Document */}
           <RightSidebar
             tableName={selectedTable.name}
             tables={tables}
             indexes={selectedTableIndexes}
             isOpen={rightSidebarOpen}
             onClose={() => setRightSidebarOpen(false)}
-            selectedRow={selectedRow}
+            selectedRows={selectedDocuments}
             columns={selectedTable.columns}
-            referenceColumns={tableReferenceColumns}
+            referenceColumns={selectedTableReferenceColumns}
           />
         </div>
       )}

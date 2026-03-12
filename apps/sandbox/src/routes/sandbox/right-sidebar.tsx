@@ -18,7 +18,7 @@ export function RightSidebar({
   indexes,
   isOpen,
   onClose,
-  selectedRow,
+  selectedRows,
   columns,
   referenceColumns,
 }: {
@@ -27,18 +27,19 @@ export function RightSidebar({
   indexes: SqliteIndexSnapshot[]
   isOpen: boolean
   onClose: () => void
-  selectedRow?: SqliteDemoRow | null
+  selectedRows?: SqliteDemoRow[]
   columns?: { name: string; type: string; pk?: number; notnull?: number }[]
   referenceColumns?: Record<string, SqliteReferenceColumn>
 }) {
   const [activeTab, setActiveTab] = useState<TabType>('schema')
+  const hasSelectedRows = selectedRows && selectedRows.length > 0
 
-  // Auto-switch to document tab when a row is selected
+  // Auto-switch to document tab when rows are selected
   useEffect(() => {
-    if (selectedRow) {
+    if (hasSelectedRows) {
       setActiveTab('document')
     }
-  }, [selectedRow])
+  }, [hasSelectedRows])
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLElement>(null)
@@ -122,25 +123,25 @@ export function RightSidebar({
 
       {/* Tabs */}
       <div className="flex border-b">
-        {selectedRow && (
+        {hasSelectedRows && (
           <button
             type="button"
             onClick={() => setActiveTab('document')}
             className={cn(
-              'flex-1 px-3 py-2 text-sm font-medium transition-colors',
+              'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
               activeTab === 'document'
                 ? 'border-b-2 border-primary text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            Document
+            {selectedRows.length === 1 ? 'Document' : `Documents (${selectedRows.length})`}
           </button>
         )}
         <button
           type="button"
           onClick={() => setActiveTab('schema')}
           className={cn(
-            'flex-1 px-3 py-2 text-sm font-medium transition-colors',
+            'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
             activeTab === 'schema'
               ? 'border-b-2 border-primary text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -152,7 +153,7 @@ export function RightSidebar({
           type="button"
           onClick={() => setActiveTab('indexes')}
           className={cn(
-            'flex-1 px-3 py-2 text-sm font-medium transition-colors',
+            'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
             activeTab === 'indexes'
               ? 'border-b-2 border-primary text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -164,9 +165,9 @@ export function RightSidebar({
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
-        {activeTab === 'document' && selectedRow && columns && referenceColumns ? (
+        {activeTab === 'document' && hasSelectedRows && columns && referenceColumns ? (
           <DocumentPreviewPanel
-            row={selectedRow}
+            rows={selectedRows}
             columns={columns}
             referenceColumns={referenceColumns}
           />

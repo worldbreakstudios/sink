@@ -17,7 +17,9 @@
       "Bash(pnpm tsc --noEmit -p packages/lib)",
       "Bash(pnpm tsc --noEmit)",
       "Bash(pnpm -r tsc --noEmit)",
-      "Bash(pnpm tsc --noEmit -p packages/cli-client)"
+      "Bash(pnpm tsc --noEmit -p packages/cli-client)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm lint)"
     ]
   }
 }

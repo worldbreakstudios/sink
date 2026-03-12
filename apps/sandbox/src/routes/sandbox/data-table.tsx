@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useHotkey } from '@tanstack/react-hotkeys'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { CodeBlock } from '@/components/ui/code-block'
 import { Input } from '@/components/ui/input'
 import {
@@ -201,8 +201,7 @@ export function DataTable({
   onCellEdit,
   onAddRow,
   onRunQuery,
-  selectedRowId,
-  onSelectRow,
+  onSelectionChange,
 }: {
   tableName: string
   columns: { name: string; type: string; pk?: number; notnull?: number }[]
@@ -212,8 +211,7 @@ export function DataTable({
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
   onRunQuery: (query: QueryState) => Promise<void>
-  selectedRowId: SqliteDemoId | null
-  onSelectRow: (rowId: SqliteDemoId | null) => void
+  onSelectionChange?: (selectedIds: Set<SqliteDemoId>) => void
 }) {
   // Get reference columns for validator display
   const referenceColumns = useMemo(() => {
@@ -253,9 +251,47 @@ export function DataTable({
   // Value viewer modal state
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
 
+  // Multi-select state
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
+
+  // Clear selection when table changes
+  useEffect(() => {
+    setSelectedRowIds(new Set())
+  }, [tableName])
+
+  // Notify parent of selection changes
+  useEffect(() => {
+    onSelectionChange?.(selectedRowIds)
+  }, [selectedRowIds, onSelectionChange])
+
   // Display either query results or default rows
   const displayRows = queryResult?.rows ?? rows
   const isFiltered = queryResult !== null
+
+  // Selection helpers
+  const toggleRowSelection = useCallback((rowId: SqliteDemoId) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleAllSelection = useCallback(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === displayRows.length) {
+        return new Set()
+      }
+      return new Set(displayRows.map((r) => r._id))
+    })
+  }, [displayRows])
+
+  const isAllSelected = displayRows.length > 0 && selectedRowIds.size === displayRows.length
+  const isSomeSelected = selectedRowIds.size > 0 && selectedRowIds.size < displayRows.length
 
   const defaultColumnNames = useMemo(() => columns.map((column) => column.name), [columns])
 
@@ -581,7 +617,7 @@ export function DataTable({
       <div className="flex items-center justify-between border-b bg-background px-4 py-3">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">{tableName}</h1>
-          <span className="text-sm text-muted-foreground">
+          <span className="whitespace-nowrap text-sm text-muted-foreground">
             {displayRows.length} {displayRows.length === 1 ? 'document' : 'documents'}
           </span>
           {isFiltered && queryResult.executionTime !== undefined && (
@@ -908,6 +944,14 @@ export function DataTable({
           <Table className="w-full min-w-max">
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
+                {/* Checkbox column */}
+                <TableHead className="w-10 px-3">
+                  <Checkbox
+                    checked={isAllSelected ? true : isSomeSelected ? 'indeterminate' : false}
+                    onCheckedChange={toggleAllSelection}
+                    aria-label="Select all"
+                  />
+                </TableHead>
                 {columnNames.map((columnName) => (
                   <TableHead
                     key={columnName}
@@ -954,17 +998,25 @@ export function DataTable({
             <TableBody>
               {displayRows.map((row) => {
                 const rowId = row._id
-                const isSelected = selectedRowId === rowId
+                const isRowSelected = selectedRowIds.has(rowId)
 
                 return (
                   <TableRow
                     key={`${tableName}-${rowId}`}
                     className={cn(
-                      'group cursor-pointer',
-                      isSelected && 'bg-accent',
+                      'group',
+                      isRowSelected && 'bg-accent',
                     )}
-                    onClick={() => onSelectRow(isSelected ? null : rowId)}
                   >
+                    {/* Checkbox cell */}
+                    <TableCell className="w-10 px-3">
+                      <Checkbox
+                        checked={isRowSelected}
+                        onCheckedChange={() => toggleRowSelection(rowId)}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={`Select row ${rowId}`}
+                      />
+                    </TableCell>
                     {columnNames.map((columnName) => (
                       <TableCell
                         key={`${tableName}-${rowId}-${columnName}`}
