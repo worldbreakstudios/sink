@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsup --config tsup.config.ts",
     "cli": "tsx src/cli.ts",
+    "test": "vitest run",
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
@@ -31,6 +32,7 @@
     "@types/node": "^24.4.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
   }
 }

@@ -1,0 +1,5 @@
+export { SinkExplorer } from './sink-explorer'
+export { CreateTableModal } from './components/create-table-modal'
+export type { QueryResult } from './components/data-table'
+export type { InsertModalState } from './components/insert-row-modal'
+export type { ExplorerClient, SinkExplorerEmptyState } from './types'

@@ -8,6 +8,7 @@ import {
   type TransactionConfig,
 } from '@tanstack/db'
 import type { LocalOnlyCollectionUtils } from '@tanstack/db'
+import { emitSinkDevtoolsChange } from './devtools.js'
 import type { AsyncSqliteDatabase } from './sqlite'
 
 export interface CreateSqliteCollectionOptions<
@@ -236,6 +237,11 @@ export async function createSqliteCollection<
     )
     baseOptions.utils.acceptMutations({
       mutations: relevantMutations as Array<PendingMutation<Record<string, unknown>>>,
+    })
+    emitSinkDevtoolsChange(options.database, {
+      tableNames: [options.tableName],
+      source: 'collection',
+      manualRefreshRequired: false,
     })
   }
 

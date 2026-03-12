@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Sink Devtools",
+  "version": "0.1.0",
+  "description": "Inspect Sink SQLite databases from Chrome DevTools.",
+  "devtools_page": "devtools.html",
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "permissions": ["scripting", "storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

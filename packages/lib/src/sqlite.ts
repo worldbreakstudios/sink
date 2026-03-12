@@ -4,6 +4,10 @@ import type {
   SqlValue,
   Sqlite3Static,
 } from '@sqlite.org/sqlite-wasm'
+import {
+  emitSinkDevtoolsChange,
+  ensureSinkDevtoolsBridge,
+} from './devtools.js'
 
 export type SqliteRow = Record<string, SqlValue>
 
@@ -630,6 +634,9 @@ export class OpfsDatabase {
  */
 export interface AsyncSqliteDatabase {
   readonly version: string
+  readonly persistenceType?: PersistenceType
+  readonly devtoolsDisplayLabel?: string
+  readonly devtoolsCanEmitExecuteNotifications?: boolean
   execute(sql: string, bind?: BindingSpec | SqlValue[]): Promise<void>
   query<TRow extends object = SqliteRow>(sql: string, bind?: BindingSpec | SqlValue[]): Promise<TRow[]>
   getTableColumns(tableName: string): Promise<SqliteTableColumn[]>
@@ -693,6 +700,93 @@ export class SyncDatabaseAdapter implements AsyncSqliteDatabase {
   }
 }
 
+class InstrumentedAsyncSqliteDatabase implements AsyncSqliteDatabase {
+  readonly #database: AsyncSqliteDatabase
+  readonly persistenceType: PersistenceType
+  readonly devtoolsDisplayLabel: string
+  readonly devtoolsCanEmitExecuteNotifications = true
+
+  constructor(
+    database: AsyncSqliteDatabase,
+    persistenceType: PersistenceType,
+    displayLabel: string,
+  ) {
+    this.#database = database
+    this.persistenceType = persistenceType
+    this.devtoolsDisplayLabel = displayLabel
+  }
+
+  get version(): string {
+    return this.#database.version
+  }
+
+  async execute(sql: string, bind?: BindingSpec | SqlValue[]): Promise<void> {
+    await this.#database.execute(sql, bind)
+
+    const tableNames = extractChangedTableNames(sql)
+    emitSinkDevtoolsChange(this, {
+      tableNames,
+      source: 'execute',
+      manualRefreshRequired: false,
+    })
+  }
+
+  async query<TRow extends object = SqliteRow>(
+    sql: string,
+    bind?: BindingSpec | SqlValue[],
+  ): Promise<TRow[]> {
+    return this.#database.query<TRow>(sql, bind)
+  }
+
+  async getTableColumns(tableName: string): Promise<SqliteTableColumn[]> {
+    return this.#database.getTableColumns(tableName)
+  }
+
+  async getTableIndexes(tableName: string): Promise<SqliteIndexSnapshot[]> {
+    return this.#database.getTableIndexes(tableName)
+  }
+
+  async rowExists(
+    tableName: string,
+    id: SqlValue,
+    keyColumn = '_id',
+  ): Promise<boolean> {
+    return this.#database.rowExists(tableName, id, keyColumn)
+  }
+
+  async coerceTableValue(
+    tableName: string,
+    columnName: string,
+    rawValue: string,
+  ): Promise<SqlValue> {
+    return this.#database.coerceTableValue(tableName, columnName, rawValue)
+  }
+
+  async createInsertableRow(tableName: string): Promise<SqliteRow> {
+    return this.#database.createInsertableRow(tableName)
+  }
+
+  async inspectTables(limit = 100): Promise<SqliteTableSnapshot[]> {
+    return this.#database.inspectTables(limit)
+  }
+
+  async close(): Promise<void> {
+    await this.#database.close()
+  }
+}
+
+export function instrumentSqliteDatabase(
+  database: AsyncSqliteDatabase,
+  persistenceType: PersistenceType,
+  displayLabel: string,
+): AsyncSqliteDatabase {
+  return new InstrumentedAsyncSqliteDatabase(
+    database,
+    persistenceType,
+    displayLabel,
+  )
+}
+
 export type PersistenceType = 'opfs' | 'localStorage' | 'memory'
 
 export interface DatabaseCreationResult {
@@ -711,6 +805,8 @@ export interface CreateDatabaseOptions {
  * Tries OPFS first (if supported), then localStorage, then memory.
  */
 export async function createDatabase(options?: CreateDatabaseOptions): Promise<DatabaseCreationResult> {
+  ensureSinkDevtoolsBridge()
+
   const {
     preferredPersistence = 'opfs',
     opfsFilename = 'app.db',
@@ -721,7 +817,10 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   if (preferredPersistence === 'opfs' && isOpfsSupported()) {
     try {
       const opfsDb = await OpfsDatabase.create(opfsFilename)
-      return { database: opfsDb, persistenceType: 'opfs' }
+      return {
+        database: instrumentSqliteDatabase(opfsDb, 'opfs', opfsFilename),
+        persistenceType: 'opfs',
+      }
     } catch (error) {
       console.warn('OPFS database creation failed, falling back to localStorage:', error)
     }
@@ -732,7 +831,11 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
     try {
       const localDb = await FrontendSqliteDatabase.createWithLocalStorage(localStorageType)
       return {
-        database: new SyncDatabaseAdapter(localDb),
+        database: instrumentSqliteDatabase(
+          new SyncDatabaseAdapter(localDb),
+          'localStorage',
+          `${localStorageType}Storage`,
+        ),
         persistenceType: 'localStorage',
       }
     } catch (error) {
@@ -743,8 +846,21 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   // Final fallback to in-memory
   const memoryDb = await FrontendSqliteDatabase.createInMemory()
   return {
-    database: new SyncDatabaseAdapter(memoryDb),
+    database: instrumentSqliteDatabase(
+      new SyncDatabaseAdapter(memoryDb),
+      'memory',
+      'memory',
+    ),
     persistenceType: 'memory',
   }
 }
 
+function extractChangedTableNames(sql: string): string[] {
+  const matches = [
+    ...sql.matchAll(
+      /\b(?:insert\s+into|update|delete\s+from|alter\s+table|create\s+table(?:\s+if\s+not\s+exists)?|drop\s+table(?:\s+if\s+exists)?)\s+"?([A-Za-z0-9_]+)"?/gi,
+    ),
+  ]
+
+  return [...new Set(matches.map((match) => match[1]).filter(Boolean) as string[])]
+}

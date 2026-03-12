@@ -10,7 +10,9 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push(
     "import type { AsyncSqliteDatabase, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
   )
-  lines.push("import { createSqliteCollection } from '@sink/lib'")
+  lines.push(
+    "import { createSqliteCollection, registerSinkDevtoolsDatabase } from '@sink/lib'",
+  )
   lines.push('')
   lines.push(
     "export type Id<TTableName extends string> = string & { readonly __tableName: TTableName }",
@@ -171,7 +173,7 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push(
     'export async function createCollections(db: AsyncSqliteDatabase): Promise<SchemaCollections> {',
   )
-  lines.push('  return {')
+  lines.push('  const collections: SchemaCollections = {')
   for (const def of definitions) {
     lines.push(
       `    ${def.tableName}: await createSqliteCollection<${rowTypeName(def.tableName)}, ${systemIdTsType(def.tableName)}, typeof INDEXES.${def.tableName}>({`,
@@ -186,6 +188,18 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('    }),')
   }
   lines.push('  }')
+  lines.push('  registerSinkDevtoolsDatabase({')
+  lines.push('    database: db,')
+  lines.push('    collections,')
+  lines.push('    tableNames: [')
+  for (const def of definitions) {
+    lines.push(`      '${def.tableName}',`)
+  }
+  lines.push('    ] as const,')
+  lines.push('    INDEXES,')
+  lines.push('    REFERENCE_COLUMNS,')
+  lines.push('  })')
+  lines.push('  return collections')
   lines.push('}')
   lines.push('')
 
