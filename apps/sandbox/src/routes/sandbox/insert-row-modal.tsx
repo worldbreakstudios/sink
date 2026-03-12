@@ -1,4 +1,5 @@
 import type { SqliteTableColumn } from '@sink/lib'
+import type { GenericRow } from '@sink/devtools-ui'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -96,7 +97,7 @@ export function InsertRowModal({
                       ) : null}
                       {referenceRows.map((row) => (
                         <option key={row._id} value={row._id}>
-                          {formatReferenceOptionLabel(row)}
+                          {formatReferenceOptionLabel(row as unknown as GenericRow)}
                         </option>
                       ))}
                     </select>

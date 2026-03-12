@@ -1,6 +1,6 @@
 export { CollectionCounter } from './collection-counter'
 export { CreateTableModal } from './create-table-modal'
-export { DataTable, parseValue, type QueryState, type QueryResult } from './data-table'
+export { DataTable, type DataTableProps, QueryBuilder, parseValue, type QueryState, type QueryResult } from '@sink/devtools-ui'
 export { IndexedQueryPreview, type IndexedQueryPreviewData } from './indexed-query-preview'
 export { InsertRowModal, type InsertModalState } from './insert-row-modal'
 export { RightSidebar } from './right-sidebar'

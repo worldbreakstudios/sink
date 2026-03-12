@@ -1,5 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import type { GenericRow } from '@sink/devtools-ui'
 import { formatReferenceOptionLabel } from './utils'
 
 export interface IndexedQueryPreviewData {
@@ -30,7 +31,7 @@ export function IndexedQueryPreview({
         <div className="space-y-1 text-sm">
           {preview.rows.map((row) => (
             <div key={row._id} className="rounded-md border px-3 py-2">
-              {formatReferenceOptionLabel(row)}
+              {formatReferenceOptionLabel(row as unknown as GenericRow)}
             </div>
           ))}
         </div>

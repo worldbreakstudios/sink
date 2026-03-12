@@ -19,7 +19,20 @@
       "Bash(pnpm -r tsc --noEmit)",
       "Bash(pnpm tsc --noEmit -p packages/cli-client)",
       "Bash(pnpm typecheck)",
-      "Bash(pnpm lint)"
+      "Bash(pnpm lint)",
+      "Bash(pnpm exec tsc --noEmit)",
+      "Bash(pnpm --filter devtools-extension build)",
+      "Bash(pnpm --filter @sink/sandbox build)",
+      "Bash(pnpm -F @sink/devtools-ui build)",
+      "Bash(pnpm -F @sink/sandbox build)",
+      "Bash(pnpm -F devtools-extension build)",
+      "Bash(wc -l /Users/tyler/src/sink/apps/sandbox/src/routes/sandbox/*.tsx /Users/tyler/src/sink/apps/sandbox/src/routes/sandbox/*.ts)",
+      "Bash(pnpm -F @sink/devtools-ui -F @sink/sandbox -F devtools-extension build)",
+      "Bash(pnpm build --filter=@sink/devtools-ui --filter=sandbox)",
+      "Bash(pnpm --filter=sandbox build)",
+      "Bash(pnpm --filter=devtools-extension build)",
+      "Bash(pnpm --filter=sandbox tsc --noEmit)",
+      "Bash(pnpm --filter=@sink/devtools-ui build)"
     ]
   }
 }

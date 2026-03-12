@@ -1,10 +1,12 @@
 import type {
   BindingSpec,
   Database,
-  SqlValue,
+  SqlValue as SqliteWasmSqlValue,
   Sqlite3Static,
 } from '@sqlite.org/sqlite-wasm'
+import { registerDatabaseForDevTools } from './devtools-bridge.js'
 
+export type SqlValue = SqliteWasmSqlValue
 export type SqliteRow = Record<string, SqlValue>
 
 export interface SqliteTableRow {
@@ -698,6 +700,8 @@ export type PersistenceType = 'opfs' | 'localStorage' | 'memory'
 export interface DatabaseCreationResult {
   database: AsyncSqliteDatabase
   persistenceType: PersistenceType
+  /** Unregister this database from DevTools. Called automatically on close. */
+  unregisterFromDevTools: () => void
 }
 
 export interface CreateDatabaseOptions {
@@ -721,7 +725,8 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   if (preferredPersistence === 'opfs' && isOpfsSupported()) {
     try {
       const opfsDb = await OpfsDatabase.create(opfsFilename)
-      return { database: opfsDb, persistenceType: 'opfs' }
+      const unregisterFromDevTools = registerDatabaseForDevTools(opfsDb, 'opfs', opfsFilename)
+      return { database: opfsDb, persistenceType: 'opfs', unregisterFromDevTools }
     } catch (error) {
       console.warn('OPFS database creation failed, falling back to localStorage:', error)
     }
@@ -731,10 +736,9 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   if (preferredPersistence !== 'memory') {
     try {
       const localDb = await FrontendSqliteDatabase.createWithLocalStorage(localStorageType)
-      return {
-        database: new SyncDatabaseAdapter(localDb),
-        persistenceType: 'localStorage',
-      }
+      const database = new SyncDatabaseAdapter(localDb)
+      const unregisterFromDevTools = registerDatabaseForDevTools(database, 'localStorage')
+      return { database, persistenceType: 'localStorage', unregisterFromDevTools }
     } catch (error) {
       console.warn('localStorage database creation failed, falling back to memory:', error)
     }
@@ -742,9 +746,8 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
 
   // Final fallback to in-memory
   const memoryDb = await FrontendSqliteDatabase.createInMemory()
-  return {
-    database: new SyncDatabaseAdapter(memoryDb),
-    persistenceType: 'memory',
-  }
+  const database = new SyncDatabaseAdapter(memoryDb)
+  const unregisterFromDevTools = registerDatabaseForDevTools(database, 'memory')
+  return { database, persistenceType: 'memory', unregisterFromDevTools }
 }
 

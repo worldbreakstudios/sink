@@ -12,8 +12,9 @@ import {
   type SqliteDemoRow,
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
-import type { SqliteReferenceColumn } from '@sink/lib'
-import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
+import type { GenericRow, IndexDefinition, ReferenceColumn } from '@sink/devtools-ui'
+import { INDEXES, REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
+import { getSchemaSource } from '@/lib/schema-sources'
 import {
   CreateTableModal,
   DataTable,
@@ -47,7 +48,7 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -119,20 +120,39 @@ function App() {
   )
 
   // Get the actual selected document objects from the IDs
-  const selectedDocuments = useMemo(() => {
+  const selectedDocuments = useMemo((): GenericRow[] => {
     if (selectedRowIds.size === 0) return []
-    return tableRows.filter((row) => selectedRowIds.has(row._id))
+    return tableRows.filter((row) => selectedRowIds.has(row._id)) as unknown as GenericRow[]
   }, [tableRows, selectedRowIds])
 
-  const handleSelectionChange = useCallback((ids: Set<SqliteDemoId>) => {
+  const handleSelectionChange = useCallback((ids: Set<string>) => {
     setSelectedRowIds(ids)
   }, [])
 
   // Get reference columns for the selected table
   const selectedTableReferenceColumns = useMemo(() => {
     if (!selectedTable) return {}
-    return (REFERENCE_COLUMNS[selectedTable.name as TableName] ?? {}) as Record<string, SqliteReferenceColumn>
+    return (REFERENCE_COLUMNS[selectedTable.name as TableName] ?? {}) as Record<string, ReferenceColumn>
   }, [selectedTable])
+
+  // Convert generated INDEXES format to devtools-ui IndexDefinition format
+  const tableIndexes = useMemo((): Record<string, IndexDefinition> => {
+    if (!selectedTable) return {}
+    const generatedIndexes = INDEXES[selectedTable.name as TableName]
+    if (!generatedIndexes) return {}
+    return Object.fromEntries(
+      Object.entries(generatedIndexes).map(([indexName, def]) => [
+        indexName,
+        { name: indexName, fields: def.fields as readonly string[], unique: def.unique },
+      ])
+    )
+  }, [selectedTable])
+
+  // Generate schema source for the selected table
+  const schemaSource = useMemo(() => {
+    if (!selectedTable) return ''
+    return getSchemaSource(selectedTable.name, tables)
+  }, [selectedTable, tables])
 
   useEffect(() => {
     if (
@@ -170,13 +190,13 @@ function App() {
 
 
   const handleCellEdit = useCallback(
-    async (rowId: SqliteDemoId, columnName: string, value: string) => {
+    async (rowId: string, columnName: string, value: string) => {
       if (workspace === null || selectedTable === undefined) return
 
       try {
         await workspace.updateCell(
           selectedTable.name as SqliteDemoTableName,
-          rowId,
+          rowId as SqliteDemoId,
           columnName,
           value,
         )
@@ -317,7 +337,7 @@ function App() {
       const executionTime = performance.now() - startTime
 
       setQueryResult({
-        rows,
+        rows: rows as unknown as GenericRow[],
         executionTime,
       })
     } catch (err) {
@@ -397,9 +417,10 @@ function App() {
           <DataTable
             tableName={selectedTable.name}
             columns={selectedTable.columns}
-            rows={tableRows}
-            collections={workspace?.collections ?? null}
-            queryResult={queryResult}
+            rows={tableRows as unknown as GenericRow[]}
+            indexes={tableIndexes}
+            referenceColumns={selectedTableReferenceColumns}
+            queryResult={queryResult as QueryResult<GenericRow> | null}
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
             onRunQuery={handleRunQuery}
@@ -409,7 +430,7 @@ function App() {
           {/* Right Sidebar - Schema/Indexes/Document */}
           <RightSidebar
             tableName={selectedTable.name}
-            tables={tables}
+            schemaSource={schemaSource}
             indexes={selectedTableIndexes}
             isOpen={rightSidebarOpen}
             onClose={() => setRightSidebarOpen(false)}
