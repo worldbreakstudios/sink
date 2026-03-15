@@ -291,6 +291,7 @@ export function DataTable({
   onCellEdit,
   onAddRow,
   onDeleteSelected,
+  onClearQuery,
   onRunQuery,
   onSelectionChange,
   selectedRowKeys,
@@ -303,6 +304,7 @@ export function DataTable({
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
   onDeleteSelected?: (rowKeys: string[]) => Promise<void>
+  onClearQuery?: () => void
   onRunQuery: (query: QueryState) => Promise<void>
   onSelectionChange?: (selectedIds: Set<string>) => void
   selectedRowKeys: Set<string>
@@ -698,7 +700,8 @@ export function DataTable({
     setOrderDirection('asc')
     setQueryMethod('collect')
     setTakeCount('10')
-  }, [])
+    onClearQuery?.()
+  }, [onClearQuery])
 
   // Prefill filter from cell action menu
   const handlePrefillFilter = useCallback((field: string, operator: Operator, value: string) => {

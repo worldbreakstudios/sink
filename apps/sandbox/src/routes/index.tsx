@@ -422,6 +422,10 @@ function App() {
     }
   }, [workspace, selectedTable])
 
+  const handleClearQuery = useCallback(() => {
+    setQueryResult(null)
+  }, [])
+
 
   return (
     <HotkeysProvider>
@@ -496,6 +500,7 @@ function App() {
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
             onDeleteSelected={handleDeleteSelected}
+            onClearQuery={handleClearQuery}
             onRunQuery={handleRunQuery}
             onSelectionChange={handleSelectionChange}
             selectedRowKeys={selectedRowKeys}
