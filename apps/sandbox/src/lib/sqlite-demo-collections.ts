@@ -423,6 +423,10 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       await transaction.isPersisted.promise
     },
     async close() {
+      for (const collection of Object.values(collections)) {
+        collection.utils.dispose()
+      }
+
       await database.close()
     },
   }

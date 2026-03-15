@@ -73,7 +73,7 @@ function App() {
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
-  const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
+  const [activeQuery, setActiveQuery] = useState<QueryState | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
   const [deleteModal, setDeleteModal] = useState<{
@@ -152,6 +152,91 @@ function App() {
     [selectedRowsQuery.data],
   )
 
+  const indexedRowsQuery = useLiveQuery(
+    (q) => {
+      if (!selectedCollection || !activeQuery) {
+        return undefined
+      }
+
+      const sqliteQuery = selectedCollection
+        .query()
+        .withIndex(activeQuery.indexName, (builder: any) => {
+          let nextBuilder = builder
+
+          for (const constraint of activeQuery.constraints) {
+            if (constraint.operator === 'isKnown' || constraint.operator === 'isUnknown') {
+              nextBuilder = nextBuilder[constraint.operator](constraint.field)
+              continue
+            }
+
+            nextBuilder = nextBuilder[constraint.operator](
+              constraint.field,
+              parseValue(constraint.value),
+            )
+          }
+
+          return nextBuilder
+        })
+        .order(activeQuery.orderDirection)
+
+      switch (activeQuery.queryMethod) {
+        case 'first':
+          return sqliteQuery.toLiveQuery(q, { single: true })
+        case 'unique':
+          return sqliteQuery.toLiveQuery(q, { limit: 2 })
+        case 'take':
+          return sqliteQuery.toLiveQuery(q, {
+            limit: parseInt(activeQuery.takeCount) || 10,
+          })
+        case 'collect':
+        default:
+          return sqliteQuery.toLiveQuery(q)
+      }
+    },
+    [activeQuery, selectedCollection],
+  )
+
+  const queryResult = useMemo<QueryResult | null>(() => {
+    if (!activeQuery) {
+      return null
+    }
+
+    if (activeQuery.queryMethod === 'first') {
+      const row = indexedRowsQuery.data as SqliteDemoRow | undefined
+
+      return {
+        rows: row ? [row] : [],
+        executionTime: 0,
+        isLive: true,
+      }
+    }
+
+    const rows = (indexedRowsQuery.data ?? []) as SqliteDemoRow[]
+
+    if (activeQuery.queryMethod === 'unique') {
+      if (rows.length > 1) {
+        return {
+          rows: [],
+          executionTime: 0,
+          isLive: true,
+          error: 'Expected a unique result, but found multiple rows.',
+        }
+      }
+
+      return {
+        rows,
+        executionTime: 0,
+        isLive: true,
+      }
+    }
+
+    return {
+      rows,
+      executionTime: 0,
+      isLive: true,
+    }
+  }, [activeQuery, indexedRowsQuery.data])
+
   // Get the actual selected document objects from the IDs
   const selectedDocuments = useMemo(() => {
     if (selectedRowKeys.size === 0 || selectedTable === undefined) return []
@@ -184,7 +269,7 @@ function App() {
 
   // Clear query result when table changes
   useEffect(() => {
-    setQueryResult(null)
+    setActiveQuery(null)
     setSelectedRowKeys(new Set())
     setDeleteModal(null)
   }, [selectedTableName])
@@ -344,7 +429,7 @@ function App() {
     try {
       await workspace.deleteRows(deleteModal.tableName, deleteModal.keys)
       await refreshSnapshot(workspace)
-      setQueryResult(null)
+      setActiveQuery(null)
       setSelectedRowKeys(new Set())
       setDeleteModal(null)
       setActionError(null)
@@ -362,68 +447,11 @@ function App() {
       : 'outline'
 
   const handleRunQuery = useCallback(async (query: QueryState) => {
-    if (!workspace || !selectedTable) return
-
-    const startTime = performance.now()
-
-    try {
-      const collection = workspace.collections[selectedTable.name as SqliteDemoTableName] as unknown as SqliteCollection<SqliteDemoRow, SqliteDemoId>
-
-      // Build the query dynamically
-      let q = collection.query().withIndex(query.indexName, (builder: any) => {
-        let b = builder
-        for (const c of query.constraints) {
-          if (c.operator === 'isKnown' || c.operator === 'isUnknown') {
-            b = b[c.operator](c.field)
-            continue
-          }
-
-          const value = parseValue(c.value)
-          b = b[c.operator](c.field, value)
-        }
-        return b
-      })
-
-      q = q.order(query.orderDirection)
-
-      let rows: SqliteDemoRow[]
-      switch (query.queryMethod) {
-        case 'first': {
-          const row = await q.first()
-          rows = row ? [row] : []
-          break
-        }
-        case 'unique': {
-          const row = await q.unique()
-          rows = row ? [row] : []
-          break
-        }
-        case 'take':
-          rows = await q.take(parseInt(query.takeCount) || 10)
-          break
-        case 'collect':
-        default:
-          rows = await q.collect()
-          break
-      }
-
-      const executionTime = performance.now() - startTime
-
-      setQueryResult({
-        rows,
-        executionTime,
-      })
-    } catch (err) {
-      setQueryResult({
-        rows: [],
-        executionTime: 0,
-        error: formatUnknownError(err),
-      })
-    }
-  }, [workspace, selectedTable])
+    setActiveQuery(query)
+  }, [])
 
   const handleClearQuery = useCallback(() => {
-    setQueryResult(null)
+    setActiveQuery(null)
   }, [])
 
 

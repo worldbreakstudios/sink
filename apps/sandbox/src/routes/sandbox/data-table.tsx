@@ -279,6 +279,7 @@ export interface QueryState {
 export interface QueryResult {
   rows: SqliteDemoRow[]
   executionTime: number
+  isLive?: boolean
   error?: string
 }
 
@@ -488,33 +489,33 @@ export function DataTable({
   const generatedCode = useMemo(() => {
     if (!selectedIndex) return `// Select an index to build a query`
 
-    let code = `await collections.${tableName}\n  .query()\n  .withIndex('${selectedIndex}'`
+    let code = `import { useLiveQuery } from '@tanstack/react-db'\n\nconst result = useLiveQuery((q) =>\n  collections.${tableName}\n    .query()\n    .withIndex('${selectedIndex}'`
 
     if (constraints.length > 0) {
-      code += `, (q) => q`
+      code += `, (builder) => builder`
       for (const c of constraints) {
         code += `\n    ${formatConstraintForCode(c)}`
       }
-      code += `\n  )`
+      code += `\n    )`
     } else {
       code += `)`
     }
 
-    code += `\n  .order('${orderDirection}')`
+    code += `\n    .order('${orderDirection}')`
 
     switch (queryMethod) {
       case 'first':
-        code += `\n  .first()`
+        code += `\n    .toLiveQuery(q, { single: true })\n)`
         break
       case 'unique':
-        code += `\n  .unique()`
+        code += `\n    .toLiveQuery(q, { limit: 2 })\n)\n\nif ((result.data?.length ?? 0) > 1) {\n  throw new Error('Expected a unique result, but found multiple rows.')\n}`
         break
       case 'take':
-        code += `\n  .take(${takeCount || '10'})`
+        code += `\n    .toLiveQuery(q, { limit: ${takeCount || '10'} })\n)`
         break
       case 'collect':
       default:
-        code += `\n  .collect()`
+        code += `\n    .toLiveQuery(q)\n)`
         break
     }
 
@@ -758,7 +759,7 @@ export function DataTable({
           </span>
           {isFiltered && queryResult.executionTime !== undefined && (
             <span className="text-xs text-muted-foreground">
-              · {queryResult.executionTime.toFixed(2)}ms
+              · {queryResult.isLive ? 'live' : `${queryResult.executionTime.toFixed(2)}ms`}
             </span>
           )}
         </div>

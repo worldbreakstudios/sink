@@ -6,6 +6,7 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
+      "@sink/lib": ["../../packages/lib/src/index.ts"],
       "#/*": ["./src/*"],
       "@/*": ["./src/*"]
     },

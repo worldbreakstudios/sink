@@ -1,9 +1,22 @@
 import {
+  and,
   createCollection,
   createTransaction,
-  localOnlyCollectionOptions,
+  eq,
+  gt,
+  gte,
+  isNull,
+  isUndefined,
+  like as tanstackLike,
+  lt,
+  lte,
+  not,
+  or,
   type Collection,
+  type InitialQueryBuilder,
   type PendingMutation,
+  type QueryBuilder,
+  type SyncConfig,
   type Transaction,
   type TransactionConfig,
 } from "@tanstack/db";
@@ -62,6 +75,7 @@ export interface SqliteCollectionUtils<
   createSqliteTransaction(
     config?: Omit<TransactionConfig<TRow>, "mutationFn">,
   ): Transaction<TRow>;
+  dispose(): void;
 }
 
 export type SqliteCollection<
@@ -98,14 +112,22 @@ export interface SqliteMutationRowDiff {
   key: SqliteRowKey | null;
   changeType: "inserted" | "updated" | "deleted" | "unchanged";
   changes: Record<string, SqliteMutationChange>;
+  beforeRow: Record<string, unknown> | null;
+  afterRow: Record<string, unknown> | null;
 }
 
 export interface SqliteMutationEvent {
   tableName: string;
+  sourceInstanceId: string;
   mutationType: PendingMutation<Record<string, unknown>>["type"];
   keyColumns: readonly string[];
   rowDiffs: SqliteMutationRowDiff[];
   publishedAt: number;
+}
+
+export interface SqliteLiveQueryOptions {
+  limit?: number;
+  single?: boolean;
 }
 
 function createChannelEventBus<TEvent>(): ChannelEventBus<TEvent> {
@@ -315,6 +337,14 @@ export interface SqliteQuery<
    * Execute the query and return up to `limit` rows.
    */
   take(limit: number): Promise<TRow[]>;
+
+  /**
+   * Build a TanStack DB query that can be passed to `useLiveQuery`.
+   */
+  toLiveQuery(
+    query: InitialQueryBuilder,
+    options?: SqliteLiveQueryOptions,
+  ): QueryBuilder<any>;
 }
 
 // Keep old interface names as aliases for backwards compatibility
@@ -549,6 +579,182 @@ function buildOrderByClause(keyColumns: readonly string[]): string {
     .join(", ");
 }
 
+type SqliteSyncMessage<TRow extends object> =
+  | {
+      type: "insert" | "update";
+      key: string | number;
+      value: TRow;
+      previousValue?: TRow;
+    }
+  | {
+      type: "delete";
+      key: string | number;
+    };
+
+interface SqliteSyncController<TRow extends object> {
+  sync: SyncConfig<TRow, string | number>;
+  confirmMutations(mutations: Array<PendingMutation<TRow>>): void;
+  applyMutationEvent(event: SqliteMutationEvent): void;
+}
+
+function createSqliteSyncController<TRow extends object, TKey>(params: {
+  initialData: TRow[];
+  getSerializedRowKey: (row: TRow) => string | number;
+  serializeKey: (key: TKey) => string | number;
+}): SqliteSyncController<TRow> {
+  const syncedRows = new Map<string | number, TRow>(
+    params.initialData.map((row) => [params.getSerializedRowKey(row), row]),
+  );
+  let syncBegin:
+    | ((options?: { immediate?: boolean }) => void)
+    | null = null;
+  let syncWrite: ((message: SqliteSyncMessage<TRow>) => void) | null = null;
+  let syncCommit: (() => void) | null = null;
+
+  const writeMessages = (messages: SqliteSyncMessage<TRow>[]) => {
+    if (!syncBegin || !syncWrite || !syncCommit || messages.length === 0) {
+      return;
+    }
+
+    syncBegin();
+
+    for (const message of messages) {
+      syncWrite(message);
+    }
+
+    syncCommit();
+  };
+
+  return {
+    sync: {
+      rowUpdateMode: "full",
+      sync: ({ begin, write, commit, markReady }) => {
+        syncBegin = begin;
+        syncWrite = write as (message: SqliteSyncMessage<TRow>) => void;
+        syncCommit = commit;
+
+        const initialMessages = Array.from(
+          syncedRows.entries(),
+          ([key, value]) =>
+            ({
+              type: "insert",
+              key,
+              value,
+            }) as const,
+        );
+
+        writeMessages(initialMessages);
+        markReady();
+
+        return () => {
+          syncBegin = null;
+          syncWrite = null;
+          syncCommit = null;
+        };
+      },
+      getSyncMetadata: () => ({}),
+    },
+    confirmMutations(mutations) {
+      const messages: SqliteSyncMessage<TRow>[] = [];
+
+      for (const mutation of mutations) {
+        const serializedKey = mutation.key as string | number;
+
+        switch (mutation.type) {
+          case "insert":
+            syncedRows.set(serializedKey, mutation.modified);
+            messages.push({
+              type: "insert",
+              key: serializedKey,
+              value: mutation.modified,
+            });
+            break;
+          case "update":
+            syncedRows.set(serializedKey, mutation.modified);
+            messages.push({
+              type: "update",
+              key: serializedKey,
+              value: mutation.modified,
+              previousValue: mutation.original as TRow,
+            });
+            break;
+          case "delete":
+            syncedRows.delete(serializedKey);
+            messages.push({
+              type: "delete",
+              key: serializedKey,
+            });
+            break;
+        }
+      }
+
+      writeMessages(messages);
+    },
+    applyMutationEvent(event) {
+      const messages: SqliteSyncMessage<TRow>[] = [];
+
+      for (const rowDiff of event.rowDiffs) {
+        switch (rowDiff.changeType) {
+          case "inserted": {
+            if (!rowDiff.afterRow) {
+              continue;
+            }
+
+            const nextRow = rowDiff.afterRow as TRow;
+            const serializedKey = params.getSerializedRowKey(nextRow);
+            syncedRows.set(serializedKey, nextRow);
+            messages.push({
+              type: "insert",
+              key: serializedKey,
+              value: nextRow,
+            });
+            break;
+          }
+          case "updated": {
+            if (!rowDiff.afterRow) {
+              continue;
+            }
+
+            const nextRow = rowDiff.afterRow as TRow;
+            const serializedKey = params.getSerializedRowKey(nextRow);
+            syncedRows.set(serializedKey, nextRow);
+            messages.push({
+              type: "update",
+              key: serializedKey,
+              value: nextRow,
+              previousValue: rowDiff.beforeRow
+                ? (rowDiff.beforeRow as TRow)
+                : undefined,
+            });
+            break;
+          }
+          case "deleted": {
+            const serializedKey =
+              rowDiff.key === null
+                ? null
+                : params.serializeKey(rowDiff.key as TKey);
+
+            if (serializedKey === null) {
+              continue;
+            }
+
+            syncedRows.delete(serializedKey);
+            messages.push({
+              type: "delete",
+              key: serializedKey,
+            });
+            break;
+          }
+          case "unchanged":
+            break;
+        }
+      }
+
+      writeMessages(messages);
+    },
+  };
+}
+
 export async function createSqliteCollection<
   TRow extends object,
   TKey,
@@ -570,14 +776,14 @@ export async function createSqliteCollection<
     structuredColumns,
     options.keyColumns,
   );
-
-  const baseOptions = localOnlyCollectionOptions<TRow, string | number>({
-    id: options.id,
-    getKey: (row) => options.serializeKey(options.getKey(row)),
-    initialData,
-  });
-
+  const sourceInstanceId = crypto.randomUUID();
   let collection!: SqliteCollection<TRow, TKey, TIndexes>;
+  let disposeMutationSubscription = () => {};
+  let baseCollection!: Collection<
+    TRow,
+    string | number,
+    SqliteCollectionUtils<TRow>
+  >;
 
   const readAll = () =>
     readAllRows<TRow>(
@@ -586,6 +792,26 @@ export async function createSqliteCollection<
       structuredColumns,
       options.keyColumns,
     );
+
+  const syncController = createSqliteSyncController<TRow, TKey>({
+    initialData,
+    getSerializedRowKey: (row) => options.serializeKey(options.getKey(row)),
+    serializeKey: options.serializeKey,
+  });
+
+  const acceptMutations: SqliteCollectionUtils<TRow>["acceptMutations"] = (
+    transaction,
+  ) => {
+    const relevantMutations = transaction.mutations.filter(
+      (mutation) => mutation.collection === baseCollection,
+    ) as Array<PendingMutation<TRow>>;
+
+    if (relevantMutations.length === 0) {
+      return;
+    }
+
+    syncController.confirmMutations(relevantMutations);
+  };
 
   const persistMutations = async (transaction: {
     mutations: Array<PendingMutation<any>>;
@@ -604,8 +830,9 @@ export async function createSqliteCollection<
       relevantMutations,
       columnNames,
       structuredColumns,
+      sourceInstanceId,
     );
-    baseOptions.utils.acceptMutations({
+    acceptMutations({
       mutations: relevantMutations as Array<
         PendingMutation<Record<string, unknown>>
       >,
@@ -626,17 +853,42 @@ export async function createSqliteCollection<
       },
     });
 
-  const baseCollection = createCollection({
-    ...baseOptions,
+  baseCollection = createCollection({
     id: options.id,
     getKey: (row) => options.serializeKey(options.getKey(row)),
+    sync: syncController.sync,
+    startSync: true,
+    gcTime: 0,
+    onInsert: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
+    onUpdate: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
+    onDelete: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
     utils: {
-      ...baseOptions.utils,
+      acceptMutations,
       readAll,
       persistMutations,
       createSqliteTransaction,
+      dispose() {
+        disposeMutationSubscription();
+      },
     },
   });
+
+  disposeMutationSubscription = subscribeToSqliteMutationEvents(
+    options.tableName,
+    (event) => {
+      if (event.sourceInstanceId === sourceInstanceId) {
+        return;
+      }
+
+      syncController.applyMutationEvent(event);
+    },
+  );
 
   collection = baseCollection as unknown as SqliteCollection<
     TRow,
@@ -672,6 +924,7 @@ export async function createSqliteCollection<
 
   collection.query = () =>
     createSqliteQuery<TRow, TIndexes>(
+      baseCollection,
       options.database,
       options.tableName,
       options.indexes ?? ({} as TIndexes),
@@ -695,10 +948,154 @@ async function readAllRows<TRow extends object>(
   return rows.map((row) => deserializeRowValues<TRow>(row, structuredColumns));
 }
 
+function getFieldPathRef(
+  row: Record<string, unknown>,
+  fieldPath: string,
+): unknown {
+  return fieldPath
+    .split(".")
+    .reduce<unknown>((value, segment) => (value as Record<string, unknown>)?.[
+      segment
+    ], row);
+}
+
+function combineLiveExpressions(expressions: unknown[]): unknown | null {
+  if (expressions.length === 0) {
+    return null;
+  }
+
+  if (expressions.length === 1) {
+    return expressions[0] ?? null;
+  }
+
+  const [first, second, ...rest] = expressions;
+
+  if (!first || !second) {
+    return first ?? second ?? null;
+  }
+
+  return and(first as never, second as never, ...(rest as never[]));
+}
+
+function buildLiveWhereExpression(
+  row: Record<string, unknown>,
+  range: SqliteQueryRangeState,
+): unknown | null {
+  const expressions: unknown[] = [];
+
+  for (const equality of range.equals) {
+    expressions.push(eq(getFieldPathRef(row, equality.field) as never, equality.value));
+  }
+
+  for (const likeMatch of range.likes) {
+    expressions.push(
+      tanstackLike(
+        getFieldPathRef(row, likeMatch.field) as never,
+        likeMatch.value as never,
+      ),
+    );
+  }
+
+  for (const nullCheck of range.nullChecks) {
+    const fieldRef = getFieldPathRef(row, nullCheck.field) as never;
+    const unknownValueExpression = or(
+      isNull(fieldRef),
+      isUndefined(fieldRef),
+    );
+
+    expressions.push(
+      nullCheck.operator === "IS NULL"
+        ? unknownValueExpression
+        : not(unknownValueExpression),
+    );
+  }
+
+  if (range.lowerBound) {
+    const fieldRef = getFieldPathRef(row, range.lowerBound.field) as never;
+
+    expressions.push(
+      range.lowerBound.operator === ">"
+        ? gt(fieldRef, range.lowerBound.value as never)
+        : gte(fieldRef, range.lowerBound.value as never),
+    );
+  }
+
+  if (range.upperBound) {
+    const fieldRef = getFieldPathRef(row, range.upperBound.field) as never;
+
+    expressions.push(
+      range.upperBound.operator === "<"
+        ? lt(fieldRef, range.upperBound.value as never)
+        : lte(fieldRef, range.upperBound.value as never),
+    );
+  }
+
+  return combineLiveExpressions(expressions);
+}
+
+function createTanStackLiveQuery<TRow extends object>(
+  query: InitialQueryBuilder,
+  sourceCollection: Collection<TRow, string | number, SqliteCollectionUtils<TRow>>,
+  range: SqliteQueryRangeState,
+  indexFields: readonly string[],
+  direction: "asc" | "desc",
+  options?: SqliteLiveQueryOptions,
+): QueryBuilder<any> {
+  let liveQuery = query.from({ row: sourceCollection });
+
+  const liveLimit = options?.limit ?? (options?.single ? 1 : undefined);
+
+  if (
+    range.equals.length > 0 ||
+    range.likes.length > 0 ||
+    range.nullChecks.length > 0 ||
+    range.lowerBound !== null ||
+    range.upperBound !== null
+  ) {
+    liveQuery = liveQuery.where(({ row }) => {
+      const expression = buildLiveWhereExpression(
+        row as unknown as Record<string, unknown>,
+        range,
+      );
+
+      if (!expression) {
+        throw new Error("Expected a live query filter expression.");
+      }
+
+      return expression as never;
+    }) as typeof liveQuery;
+  }
+
+  for (const field of indexFields) {
+    liveQuery = liveQuery.orderBy(
+      ({ row }) =>
+        getFieldPathRef(row as unknown as Record<string, unknown>, field) as never,
+      direction,
+    ) as typeof liveQuery;
+  }
+
+  liveQuery = liveQuery.select(({ row }) => ({ ...row }) as never) as typeof liveQuery;
+
+  if (liveLimit !== undefined) {
+    liveQuery = liveQuery.limit(liveLimit) as typeof liveQuery;
+  }
+
+  if (options?.single) {
+    return liveQuery.findOne();
+  }
+
+  return liveQuery;
+}
+
 function createSqliteQuery<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
 >(
+  sourceCollection: Collection<
+    TRow,
+    string | number,
+    SqliteCollectionUtils<TRow>
+  >,
   database: AsyncSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
@@ -782,6 +1179,16 @@ function createSqliteQuery<
     async take(limit) {
       return run(limit);
     },
+    toLiveQuery(query, options) {
+      return createTanStackLiveQuery(
+        query,
+        sourceCollection,
+        range,
+        indexFields,
+        direction,
+        options,
+      );
+    },
   };
 }
 
@@ -790,6 +1197,7 @@ async function persistSqliteMutations<TRow extends object>(
   mutations: Array<PendingMutation<TRow>>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
+  sourceInstanceId: string,
 ): Promise<SqliteMutationEvent[]> {
   const mutationEvents: SqliteMutationEvent[] = [];
 
@@ -798,7 +1206,13 @@ async function persistSqliteMutations<TRow extends object>(
   try {
     for (const mutation of mutations) {
       mutationEvents.push(
-        await applyMutation(options, mutation, columnNames, structuredColumns),
+        await applyMutation(
+          options,
+          mutation,
+          columnNames,
+          structuredColumns,
+          sourceInstanceId,
+        ),
       );
     }
 
@@ -831,6 +1245,7 @@ async function applyMutation<TRow extends object>(
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
+  sourceInstanceId: string,
 ): Promise<SqliteMutationEvent> {
   const mutationKey = deserializeMutationKey(
     options,
@@ -878,6 +1293,7 @@ async function applyMutation<TRow extends object>(
     beforeRows,
     afterRows,
     mutationKey,
+    sourceInstanceId,
   );
 }
 
@@ -918,6 +1334,7 @@ function createMutationEvent<TRow extends object>(
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
   mutationKey: SqliteRowKey,
+  sourceInstanceId: string,
 ): SqliteMutationEvent {
   const rowDiffs = buildMutationRowDiffs(
     beforeRows,
@@ -928,6 +1345,7 @@ function createMutationEvent<TRow extends object>(
 
   return {
     tableName: options.tableName,
+    sourceInstanceId,
     mutationType: mutation.type,
     keyColumns: [...options.keyColumns],
     rowDiffs,
@@ -961,9 +1379,11 @@ function buildMutationRowDiffs(
           : afterRow === undefined
             ? "deleted"
             : Object.keys(changes).length === 0
-              ? "unchanged"
+            ? "unchanged"
               : "updated",
       changes,
+      beforeRow: beforeRow ?? null,
+      afterRow: afterRow ?? null,
     });
   }
 
