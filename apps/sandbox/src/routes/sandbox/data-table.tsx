@@ -31,7 +31,12 @@ import { INDEXES, REFERENCE_COLUMNS } from '@/data/generated/schema.gen'
 import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
-import { formatCellValue, getRowValue, isMultilineColumn } from './utils'
+import {
+  formatCellValue,
+  getRowValue,
+  isMultilineColumn,
+  isStructuredColumnType,
+} from './utils'
 import { ValueViewerModal } from './value-viewer-modal'
 
 const DEFAULT_COLUMN_WIDTH = 150
@@ -101,12 +106,24 @@ function saveTableLayout(tableName: string, layout: TableLayout): void {
 }
 
 function formatValueForCode(value: string): string {
-  if (value === '') return "''"
-  if (value === 'null') return 'null'
-  if (value === 'true' || value === 'false') return value
-  if (/^\d+n$/.test(value)) return value
-  if (/^\d+$/.test(value)) return value
-  return `'${value.replace(/'/g, "\\'")}'`
+  const parsed = parseValue(value)
+
+  if (parsed === '') return "''"
+  if (parsed === null) return 'null'
+  if (typeof parsed === 'boolean' || typeof parsed === 'number') {
+    return String(parsed)
+  }
+  if (typeof parsed === 'bigint') {
+    return `${parsed}n`
+  }
+  if (
+    Array.isArray(parsed) ||
+    (typeof parsed === 'object' && parsed !== null)
+  ) {
+    return JSON.stringify(parsed)
+  }
+
+  return `'${String(parsed).replace(/'/g, "\\'")}'`
 }
 
 export function parseValue(value: string): unknown {
@@ -121,6 +138,13 @@ export function parseValue(value: string): unknown {
       return BigInt(value)
     }
     return num
+  }
+  if (value.startsWith('{') || value.startsWith('[')) {
+    try {
+      return JSON.parse(value)
+    } catch {
+      return value
+    }
   }
   return value
 }
@@ -1029,7 +1053,8 @@ export function DataTable({
                       >
                         {editingCell?.rowId === rowId &&
                         editingCell.columnName === columnName ? (
-                          isMultilineColumn(columnName) ? (
+                          isMultilineColumn(columnName) ||
+                          isStructuredColumnType(columnInfoMap[columnName]?.type ?? '') ? (
                             <Textarea
                               autoFocus
                               value={editingCell.value}

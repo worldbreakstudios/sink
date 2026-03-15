@@ -17,7 +17,11 @@ import type {
   SqliteDemoTableName,
   SqliteInsertDraft,
 } from '@/lib/sqlite-demo-collections'
-import { formatReferenceOptionLabel, isMultilineColumn } from './utils'
+import {
+  formatReferenceOptionLabel,
+  isMultilineColumn,
+  isStructuredColumnType,
+} from './utils'
 
 type PendingInsertTransaction = ReturnType<
   SqliteDemoCollectionsWorkspace['createBatchTransaction']
@@ -100,7 +104,7 @@ export function InsertRowModal({
                         </option>
                       ))}
                     </select>
-                  ) : isMultilineColumn(column.name) ? (
+                  ) : isMultilineColumn(column.name) || isStructuredColumnType(column.type) ? (
                     <Textarea
                       id={`insert-${column.name}`}
                       value={modal.draft[column.name] ?? ''}

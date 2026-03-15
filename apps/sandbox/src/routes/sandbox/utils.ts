@@ -1,5 +1,13 @@
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
+}
+
 export function formatCellValue(value: unknown): string {
   if (value === null) {
     return 'NULL'
@@ -13,6 +21,10 @@ export function formatCellValue(value: unknown): string {
     return `[binary ${value.byteLength} bytes]`
   }
 
+  if (Array.isArray(value) || isPlainObject(value)) {
+    return JSON.stringify(value, null, 2)
+  }
+
   return String(value)
 }
 
@@ -22,6 +34,16 @@ export function getRowValue(row: SqliteDemoRow, columnName: string): unknown {
 
 export function isMultilineColumn(columnName: string): boolean {
   return columnName === 'body' || columnName === 'description'
+}
+
+export function isStructuredColumnType(columnType: string): boolean {
+  const normalizedType = columnType.toUpperCase()
+
+  return (
+    normalizedType.includes('JSON_ARRAY') ||
+    normalizedType.includes('JSON_OBJECT') ||
+    normalizedType.includes('JSON_RECORD')
+  )
 }
 
 export function formatReferenceOptionLabel(row: SqliteDemoRow): string {

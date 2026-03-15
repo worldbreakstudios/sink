@@ -188,6 +188,145 @@ export type SqliteQueryInitializer<
 
 export type SqliteIndexedQuery<TRow extends object> = SqliteQuery<TRow, Record<string, never>>
 
+type StructuredColumnKind = 'array' | 'object' | 'record'
+type StructuredColumns = Partial<Record<string, StructuredColumnKind>>
+
+function getStructuredColumnKind(columnType: string): StructuredColumnKind | null {
+  const normalizedType = columnType.toUpperCase()
+
+  if (normalizedType.includes('JSON_ARRAY')) {
+    return 'array'
+  }
+
+  if (normalizedType.includes('JSON_OBJECT')) {
+    return 'object'
+  }
+
+  if (normalizedType.includes('JSON_RECORD')) {
+    return 'record'
+  }
+
+  return null
+}
+
+function getStructuredColumns(
+  columns: Array<{ name: string; type: string }>,
+): StructuredColumns {
+  const structuredColumns: StructuredColumns = {}
+
+  for (const column of columns) {
+    const kind = getStructuredColumnKind(column.type)
+
+    if (kind !== null) {
+      structuredColumns[column.name] = kind
+    }
+  }
+
+  return structuredColumns
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
+}
+
+function isStructuredValue(
+  kind: StructuredColumnKind,
+  value: unknown,
+): boolean {
+  if (kind === 'array') {
+    return Array.isArray(value)
+  }
+
+  return isPlainObject(value)
+}
+
+function serializeStructuredValue(
+  kind: StructuredColumnKind,
+  value: unknown,
+): unknown {
+  if (value === null || value === undefined) {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+
+      if (isStructuredValue(kind, parsed)) {
+        return value
+      }
+    } catch {
+      // Fall through and encode the raw string as JSON.
+    }
+  }
+
+  return JSON.stringify(value)
+}
+
+function serializeColumnValue(
+  columnName: string,
+  value: unknown,
+  structuredColumns: StructuredColumns,
+): unknown {
+  const kind = structuredColumns[columnName]
+
+  if (!kind) {
+    return value
+  }
+
+  return serializeStructuredValue(kind, value)
+}
+
+function serializeRowValues(
+  row: Record<string, unknown>,
+  structuredColumns: StructuredColumns,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(row).map(([columnName, value]) => [
+      columnName,
+      serializeColumnValue(columnName, value, structuredColumns),
+    ]),
+  )
+}
+
+function deserializeStructuredValue(
+  kind: StructuredColumnKind,
+  value: unknown,
+): unknown {
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+
+    return isStructuredValue(kind, parsed) ? parsed : value
+  } catch {
+    return value
+  }
+}
+
+function deserializeRowValues<TRow extends object>(
+  row: Record<string, unknown>,
+  structuredColumns: StructuredColumns,
+): TRow {
+  return Object.fromEntries(
+    Object.entries(row).map(([columnName, value]) => {
+      const kind = structuredColumns[columnName]
+
+      if (!kind) {
+        return [columnName, value]
+      }
+
+      return [columnName, deserializeStructuredValue(kind, value)]
+    }),
+  ) as TRow
+}
+
 export async function createSqliteCollection<
   TRow extends object,
   TKey extends string | number,
@@ -195,12 +334,17 @@ export async function createSqliteCollection<
 >(
   options: CreateSqliteCollectionOptions<TRow, TKey, TIndexes>,
 ): Promise<SqliteCollection<TRow, TKey, TIndexes>> {
-  // Load initial data asynchronously (ordered by _id)
-  const initialData = await readAllRows<TRow>(options.database, options.tableName)
-
   // Cache table columns for system fields (avoid repeated async calls)
   const tableColumns = await options.database.getTableColumns(options.tableName)
   const columnNames = new Set(tableColumns.map((column) => column.name))
+  const structuredColumns = getStructuredColumns(tableColumns)
+
+  // Load initial data asynchronously (ordered by _id)
+  const initialData = await readAllRows<TRow>(
+    options.database,
+    options.tableName,
+    structuredColumns,
+  )
 
   const baseOptions = localOnlyCollectionOptions<TRow, TKey>({
     id: options.id,
@@ -211,7 +355,7 @@ export async function createSqliteCollection<
   let collection!: SqliteCollection<TRow, TKey, TIndexes>
 
   const readAll = () =>
-    readAllRows<TRow>(options.database, options.tableName)
+    readAllRows<TRow>(options.database, options.tableName, structuredColumns)
 
   const persistMutations = async (transaction: {
     mutations: Array<PendingMutation<any>>
@@ -233,6 +377,7 @@ export async function createSqliteCollection<
       >,
       relevantMutations,
       columnNames,
+      structuredColumns,
     )
     baseOptions.utils.acceptMutations({
       mutations: relevantMutations as Array<PendingMutation<Record<string, unknown>>>,
@@ -266,6 +411,7 @@ export async function createSqliteCollection<
       options.database,
       options.tableName,
       options.indexes ?? ({} as TIndexes),
+      structuredColumns,
     )
 
   return collection
@@ -274,10 +420,13 @@ export async function createSqliteCollection<
 async function readAllRows<TRow extends object>(
   database: AsyncSqliteDatabase,
   tableName: string,
+  structuredColumns: StructuredColumns,
 ): Promise<TRow[]> {
-  return database.query<TRow>(
+  const rows = await database.query<Record<string, unknown>>(
     `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY "_id" ASC;`,
   )
+
+  return rows.map((row) => deserializeRowValues<TRow>(row, structuredColumns))
 }
 
 function createSqliteQuery<
@@ -287,6 +436,7 @@ function createSqliteQuery<
   database: AsyncSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
+  structuredColumns: StructuredColumns,
   initialIndexFields: readonly string[] = ['_id'],
   initialRange: SqliteQueryRangeState = { equals: [], lowerBound: null, upperBound: null },
 ): SqliteQuery<TRow, TIndexes> {
@@ -300,9 +450,11 @@ function createSqliteQuery<
       indexFields,
       range,
       direction,
+      structuredColumns,
       limit,
     )
-    return database.query<TRow>(sql, bind as any)
+    const rows = await database.query<Record<string, unknown>>(sql, bind as any)
+    return rows.map((row) => deserializeRowValues<TRow>(row, structuredColumns))
   }
 
   return {
@@ -358,12 +510,13 @@ async function persistSqliteMutations<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutations: Array<PendingMutation<TRow>>,
   columnNames: Set<string>,
+  structuredColumns: StructuredColumns,
 ): Promise<void> {
   await options.database.execute('BEGIN')
 
   try {
     for (const mutation of mutations) {
-      await applyMutation(options, mutation, columnNames)
+      await applyMutation(options, mutation, columnNames, structuredColumns)
     }
 
     await options.database.execute('COMMIT')
@@ -382,23 +535,32 @@ async function applyMutation<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
+  structuredColumns: StructuredColumns,
 ): Promise<void> {
   const snapshotQuery = buildMutationSnapshotQuery(options, mutation.key)
-  const beforeRows = await queryMutationRows(options.database, snapshotQuery)
+  const beforeRows = await queryMutationRows(
+    options.database,
+    snapshotQuery,
+    structuredColumns,
+  )
 
   switch (mutation.type) {
     case 'insert':
-      await insertRow(options, mutation.modified, columnNames)
+      await insertRow(options, mutation.modified, columnNames, structuredColumns)
       break
     case 'update':
-      await updateRow(options, mutation, columnNames)
+      await updateRow(options, mutation, columnNames, structuredColumns)
       break
     case 'delete':
       await deleteRow(options, mutation.key)
       break
   }
 
-  const afterRows = await queryMutationRows(options.database, snapshotQuery)
+  const afterRows = await queryMutationRows(
+    options.database,
+    snapshotQuery,
+    structuredColumns,
+  )
   logMutationDiff(options, mutation, snapshotQuery, beforeRows, afterRows)
 }
 
@@ -432,11 +594,14 @@ function buildMutationSnapshotQuery<TRow extends object>(
 async function queryMutationRows(
   database: AsyncSqliteDatabase,
   snapshotQuery: MutationSnapshotQuery,
+  structuredColumns: StructuredColumns,
 ): Promise<Array<Record<string, unknown>>> {
-  return database.query<Record<string, unknown>>(
+  const rows = await database.query<Record<string, unknown>>(
     snapshotQuery.sql,
     snapshotQuery.bind,
   )
+
+  return rows.map((row) => deserializeRowValues(row, structuredColumns))
 }
 
 function logMutationDiff<TRow extends object>(
@@ -522,10 +687,12 @@ async function insertRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   row: TRow,
   columnNames: Set<string>,
+  structuredColumns: StructuredColumns,
 ): Promise<void> {
   const completeRow = withInsertSystemFields(row, columnNames)
   await validateReferenceColumns(options, completeRow)
-  const entries = Object.entries(completeRow)
+  const serializedRow = serializeRowValues(completeRow, structuredColumns)
+  const entries = Object.entries(serializedRow)
 
   if (entries.length === 0) {
     await options.database.execute(
@@ -548,10 +715,12 @@ async function updateRow<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
+  structuredColumns: StructuredColumns,
 ): Promise<void> {
   const changes = withUpdateSystemFields(mutation.changes, columnNames)
   await validateReferenceColumns(options, changes)
-  const entries = Object.entries(changes).filter(
+  const serializedChanges = serializeRowValues(changes, structuredColumns)
+  const entries = Object.entries(serializedChanges).filter(
     ([column]) => column !== options.keyColumn,
   )
 
@@ -728,13 +897,21 @@ function buildIndexedSelectSql(
   indexFields: readonly string[],
   range: SqliteQueryRangeState,
   direction: 'asc' | 'desc',
+  structuredColumns: StructuredColumns,
   limit?: number,
 ): { sql: string; bind: unknown[] } {
   const whereClauses: string[] = []
   const bind: unknown[] = []
 
   for (const equality of range.equals) {
-    appendWhereClause(whereClauses, bind, equality.field, '=', equality.value)
+    appendWhereClause(
+      whereClauses,
+      bind,
+      equality.field,
+      '=',
+      equality.value,
+      structuredColumns,
+    )
   }
 
   if (range.lowerBound) {
@@ -744,6 +921,7 @@ function buildIndexedSelectSql(
       range.lowerBound.field,
       range.lowerBound.operator,
       range.lowerBound.value,
+      structuredColumns,
     )
   }
 
@@ -754,6 +932,7 @@ function buildIndexedSelectSql(
       range.upperBound.field,
       range.upperBound.operator,
       range.upperBound.value,
+      structuredColumns,
     )
   }
 
@@ -780,9 +959,40 @@ function appendWhereClause(
   field: string,
   operator: SqliteComparisonOperator,
   value: unknown,
+  structuredColumns: StructuredColumns,
 ): void {
   whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator} ?`)
-  bind.push(value)
+  bind.push(serializeQueryValue(field, value, structuredColumns))
+}
+
+function serializeQueryValue(
+  fieldPath: string,
+  value: unknown,
+  structuredColumns: StructuredColumns,
+): unknown {
+  if (value === null || value === undefined) {
+    return value
+  }
+
+  const [rootField] = fieldPath.split('.')
+
+  if (!rootField) {
+    return value
+  }
+
+  const kind = structuredColumns[rootField]
+
+  if (!kind) {
+    return value
+  }
+
+  if (!fieldPath.includes('.')) {
+    return serializeStructuredValue(kind, value)
+  }
+
+  return isPlainObject(value) || Array.isArray(value)
+    ? JSON.stringify(value)
+    : value
 }
 
 function fieldPathToSqlExpression(fieldPath: string): string {

@@ -1,13 +1,37 @@
+export type TableId<TTableName extends string> = string & {
+  readonly __tableName: TTableName
+}
+
+export type JsonColumnKind = 'array' | 'object' | 'record'
+
+export type ColumnValidatorDescriptor =
+  | { kind: 'string' }
+  | { kind: 'number' }
+  | { kind: 'float' }
+  | { kind: 'boolean' }
+  | { kind: 'id'; referencedTable: string }
+  | { kind: 'array'; element: ColumnValidatorDescriptor }
+  | { kind: 'object'; fields: Record<string, ColumnValidatorDescriptor> }
+  | {
+    kind: 'record'
+    keys: ColumnValidatorDescriptor
+    values: ColumnValidatorDescriptor
+  }
+
 export interface ColumnDescriptor<
-  TReferencedTable extends string | undefined = undefined,
+  TValue = unknown,
+  TReferencedTable extends string | undefined = string | undefined,
 > {
   readonly sqliteType: string
   readonly tsType: string
+  readonly __valueType?: TValue
   readonly isNullable: boolean
   readonly isPrimaryKey: boolean
   readonly defaultValue: unknown | undefined
   readonly referencedTable: TReferencedTable
   readonly enforceExists: boolean
+  readonly jsonKind: JsonColumnKind | null
+  readonly validator: ColumnValidatorDescriptor
 }
 
 export interface RegisteredSchemaTables {}
@@ -47,105 +71,219 @@ type RegisteredSchemaTableName = keyof RegisteredSchemaTables extends never
   ? string
   : Extract<keyof RegisteredSchemaTables, string>
 
-function freeze<TReferencedTable extends string | undefined>(
-  descriptor: ColumnDescriptor<TReferencedTable>,
-): ColumnDescriptor<TReferencedTable> {
+type ObjectColumnFields = Record<string, ColumnDescriptor<any, any>>
+
+export type ColumnValue<TDescriptor extends ColumnDescriptor<any, any>> =
+  TDescriptor extends ColumnDescriptor<infer TValue, any> ? TValue : never
+
+type ObjectColumnValue<TFields extends ObjectColumnFields> = {
+  [TKey in keyof TFields]: ColumnValue<TFields[TKey]>
+}
+
+function freeze<TValue, TReferencedTable extends string | undefined>(
+  descriptor: ColumnDescriptor<TValue, TReferencedTable>,
+): ColumnDescriptor<TValue, TReferencedTable> {
   return Object.freeze(descriptor)
 }
 
+function renderValidatorTsType(validator: ColumnValidatorDescriptor): string {
+  switch (validator.kind) {
+    case 'string':
+      return 'string'
+    case 'number':
+    case 'float':
+      return 'number'
+    case 'boolean':
+      return 'boolean'
+    case 'id':
+      return `Id<'${validator.referencedTable}'>`
+    case 'array':
+      return `Array<${renderValidatorTsType(validator.element)}>`
+    case 'object': {
+      const fields = Object.entries(validator.fields).map(
+        ([fieldName, fieldValidator]) =>
+          `${fieldName}: ${renderValidatorTsType(fieldValidator)}`,
+      )
+      return `{ ${fields.join('; ')} }`
+    }
+    case 'record':
+      return `Record<string, ${renderValidatorTsType(validator.values)}>`
+  }
+}
+
+function createDescriptor<TValue, TReferencedTable extends string | undefined>(
+  config: Omit<ColumnDescriptor<TValue, TReferencedTable>, 'tsType'> & {
+    tsType?: string
+  },
+): ColumnDescriptor<TValue, TReferencedTable> {
+  return freeze({
+    ...config,
+    tsType: config.tsType ?? renderValidatorTsType(config.validator),
+  })
+}
+
 export const v = {
-  string(): ColumnDescriptor {
-    return freeze({
+  string(): ColumnDescriptor<string> {
+    return createDescriptor({
       sqliteType: 'TEXT NOT NULL',
-      tsType: 'string',
       isNullable: false,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
       enforceExists: false,
+      jsonKind: null,
+      validator: { kind: 'string' },
     })
   },
 
-  number(): ColumnDescriptor {
-    return freeze({
+  number(): ColumnDescriptor<number> {
+    return createDescriptor({
       sqliteType: 'INTEGER NOT NULL',
-      tsType: 'number',
       isNullable: false,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
       enforceExists: false,
+      jsonKind: null,
+      validator: { kind: 'number' },
     })
   },
 
-  float(): ColumnDescriptor {
-    return freeze({
+  float(): ColumnDescriptor<number> {
+    return createDescriptor({
       sqliteType: 'REAL NOT NULL',
-      tsType: 'number',
       isNullable: false,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
       enforceExists: false,
+      jsonKind: null,
+      validator: { kind: 'float' },
     })
   },
 
-  boolean(): ColumnDescriptor {
-    return freeze({
+  boolean(): ColumnDescriptor<boolean> {
+    return createDescriptor({
       sqliteType: 'INTEGER NOT NULL',
-      tsType: 'boolean',
       isNullable: false,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: undefined,
       enforceExists: false,
+      jsonKind: null,
+      validator: { kind: 'boolean' },
     })
   },
 
   id<TTableName extends RegisteredSchemaTableName>(
     tableName: TTableName,
     options: IdColumnOptions = {},
-  ): ColumnDescriptor<TTableName> {
-    return freeze({
+  ): ColumnDescriptor<TableId<TTableName>, TTableName> {
+    return createDescriptor({
       sqliteType: 'TEXT NOT NULL',
-      tsType: 'string',
       isNullable: false,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: tableName,
       enforceExists: options.enforceExists ?? false,
+      jsonKind: null,
+      validator: { kind: 'id', referencedTable: tableName },
     })
   },
 
-  nullable<TReferencedTable extends string | undefined>(
-    inner: ColumnDescriptor<TReferencedTable>,
-  ): ColumnDescriptor<TReferencedTable> {
+  array<TItem>(
+    inner: ColumnDescriptor<TItem, any>,
+  ): ColumnDescriptor<TItem[]> {
+    return createDescriptor({
+      sqliteType: 'JSON_ARRAY TEXT NOT NULL',
+      isNullable: false,
+      isPrimaryKey: false,
+      defaultValue: undefined,
+      referencedTable: undefined,
+      enforceExists: false,
+      jsonKind: 'array',
+      validator: {
+        kind: 'array',
+        element: inner.validator,
+      },
+    })
+  },
+
+  object<TFields extends ObjectColumnFields>(
+    fields: TFields,
+  ): ColumnDescriptor<ObjectColumnValue<TFields>> {
+    return createDescriptor({
+      sqliteType: 'JSON_OBJECT TEXT NOT NULL',
+      isNullable: false,
+      isPrimaryKey: false,
+      defaultValue: undefined,
+      referencedTable: undefined,
+      enforceExists: false,
+      jsonKind: 'object',
+      validator: {
+        kind: 'object',
+        fields: Object.fromEntries(
+          Object.entries(fields).map(([fieldName, field]) => [
+            fieldName,
+            field.validator,
+          ]),
+        ),
+      },
+    })
+  },
+
+  record<TKeys extends ColumnDescriptor<string, any>, TValue>(
+    keys: TKeys,
+    values: ColumnDescriptor<TValue, any>,
+  ): ColumnDescriptor<Record<string, TValue>> {
+    return createDescriptor({
+      sqliteType: 'JSON_RECORD TEXT NOT NULL',
+      isNullable: false,
+      isPrimaryKey: false,
+      defaultValue: undefined,
+      referencedTable: undefined,
+      enforceExists: false,
+      jsonKind: 'record',
+      validator: {
+        kind: 'record',
+        keys: keys.validator,
+        values: values.validator,
+      },
+    })
+  },
+
+  nullable<TValue, TReferencedTable extends string | undefined>(
+    inner: ColumnDescriptor<TValue, TReferencedTable>,
+  ): ColumnDescriptor<TValue | null, TReferencedTable> {
     const sqliteType = inner.sqliteType
       .replace(' NOT NULL', '')
       .replace(' PRIMARY KEY', '')
-    return freeze({
+    return createDescriptor({
       sqliteType,
-      tsType: `${inner.tsType} | null`,
+      tsType: inner.isNullable ? inner.tsType : `${inner.tsType} | null`,
       isNullable: true,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: inner.referencedTable,
       enforceExists: inner.enforceExists,
+      jsonKind: inner.jsonKind,
+      validator: inner.validator,
     })
   },
 
-  default<T, TReferencedTable extends string | undefined>(
-    inner: ColumnDescriptor<TReferencedTable>,
-    value: T,
-  ): ColumnDescriptor<TReferencedTable> {
-    return freeze({
+  default<TValue, TReferencedTable extends string | undefined>(
+    inner: ColumnDescriptor<TValue, TReferencedTable>,
+    value: TValue,
+  ): ColumnDescriptor<TValue, TReferencedTable> {
+    return createDescriptor({
       sqliteType: inner.sqliteType,
-      tsType: inner.tsType,
       isNullable: inner.isNullable,
       isPrimaryKey: inner.isPrimaryKey,
       defaultValue: value,
       referencedTable: inner.referencedTable,
       enforceExists: inner.enforceExists,
+      jsonKind: inner.jsonKind,
+      validator: inner.validator,
     })
   },
 } as const
@@ -157,9 +295,9 @@ export interface TableDefinitionOptions {
 }
 
 export interface TableDefinition<
-  TColumns extends Record<string, ColumnDescriptor<any>> = Record<
+  TColumns extends Record<string, ColumnDescriptor<any, any>> = Record<
     string,
-    ColumnDescriptor<any>
+    ColumnDescriptor<any, any>
   >,
 > {
   tableName: string
@@ -239,7 +377,7 @@ function normalizeIndexDefinition(
   }
 }
 
-function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<any>>>(
+function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<any, any>>>(
   tableName: string,
   columns: TColumns,
   options: TableDefinitionOptions = {},
@@ -295,7 +433,7 @@ function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<
   }
 }
 
-export function defineTable<TColumns extends Record<string, ColumnDescriptor<any>>>(
+export function defineTable<TColumns extends Record<string, ColumnDescriptor<any, any>>>(
   tableName: string,
   columns: TColumns,
   options: TableDefinitionOptions = {},

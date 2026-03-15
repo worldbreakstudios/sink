@@ -346,7 +346,18 @@ function sqlLiteral(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value)
   }
+  if (Array.isArray(value) || isPlainObject(value)) {
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'`
+  }
   return 'NULL'
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
 }
 
 function renderTsType(col: ColumnDescriptor): string {

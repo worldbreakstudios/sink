@@ -5,7 +5,9 @@ import type {
   Sqlite3Static,
 } from '@sqlite.org/sqlite-wasm'
 
-export type SqliteRow = Record<string, SqlValue>
+type StructuredColumnKind = 'array' | 'object' | 'record'
+
+export type SqliteRow = Record<string, unknown>
 
 export interface SqliteTableRow {
   rowId: number
@@ -40,6 +42,106 @@ export interface SqliteIndexSnapshot {
 export interface SqliteExplorerSnapshot {
   version: string
   tables: SqliteTableSnapshot[]
+}
+
+function getStructuredColumnKind(columnType: string): StructuredColumnKind | null {
+  const normalizedType = columnType.toUpperCase()
+
+  if (normalizedType.includes('JSON_ARRAY')) {
+    return 'array'
+  }
+
+  if (normalizedType.includes('JSON_OBJECT')) {
+    return 'object'
+  }
+
+  if (normalizedType.includes('JSON_RECORD')) {
+    return 'record'
+  }
+
+  return null
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
+}
+
+function assertStructuredValue(
+  kind: StructuredColumnKind,
+  value: unknown,
+  columnName: string,
+): void {
+  if (kind === 'array') {
+    if (Array.isArray(value)) {
+      return
+    }
+
+    throw new Error(`Expected "${columnName}" to be a JSON array.`)
+  }
+
+  if (isPlainObject(value)) {
+    return
+  }
+
+  throw new Error(`Expected "${columnName}" to be a JSON object.`)
+}
+
+function parseStructuredInput(
+  kind: StructuredColumnKind,
+  rawValue: string,
+  columnName: string,
+): string {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(rawValue)
+  } catch {
+    throw new Error(`Expected valid JSON for "${columnName}".`)
+  }
+
+  assertStructuredValue(kind, parsed, columnName)
+  return JSON.stringify(parsed)
+}
+
+function decodeStructuredValue(
+  kind: StructuredColumnKind,
+  value: unknown,
+): unknown {
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+    assertStructuredValue(kind, parsed, 'value')
+    return parsed
+  } catch {
+    return value
+  }
+}
+
+function decodeRowValues(
+  row: Record<string, unknown>,
+  columns: SqliteTableColumn[],
+): Record<string, unknown> {
+  const columnsByName = new Map(columns.map((column) => [column.name, column]))
+
+  return Object.fromEntries(
+    Object.entries(row).map(([columnName, value]) => {
+      const column = columnsByName.get(columnName)
+      const kind = column ? getStructuredColumnKind(column.type) : null
+
+      if (kind === null) {
+        return [columnName, value]
+      }
+
+      return [columnName, decodeStructuredValue(kind, value)]
+    }),
+  )
 }
 
 let sqlitePromise: Promise<Sqlite3Static> | null = null
@@ -105,13 +207,13 @@ export class FrontendSqliteDatabase {
     return this.#sqlite.version.libVersion
   }
 
-  execute(sql: string, bind?: BindingSpec): void {
+  execute(sql: string, bind?: BindingSpec | SqlValue[]): void {
     this.#db.exec({ sql, bind })
   }
 
   query<TRow extends object = SqliteRow>(
     sql: string,
-    bind?: BindingSpec,
+    bind?: BindingSpec | SqlValue[],
   ): TRow[] {
     return this.#db.exec({
       sql,
@@ -141,23 +243,28 @@ export class FrontendSqliteDatabase {
       `,
     )
 
-    return tables.map(({ name, sql }) => ({
-      name,
-      schema: sql,
-      columns: this.query<SqliteTableColumn>(
+    return tables.map(({ name, sql }) => {
+      const columns = this.query<SqliteTableColumn>(
         `PRAGMA table_info("${escapeIdentifier(name)}");`,
-      ),
-      rows: this.query<Record<string, SqlValue>>(
+      )
+      const rows = this.query<Record<string, SqlValue>>(
         `SELECT rowid AS __rowid__, * FROM "${escapeIdentifier(name)}" ORDER BY rowid ASC LIMIT ${limit};`,
       ).map((row) => {
         const { __rowid__, ...values } = row
 
         return {
           rowId: Number(__rowid__),
-          values,
+          values: decodeRowValues(values, columns),
         }
-      }),
-    }))
+      })
+
+      return {
+        name,
+        schema: sql,
+        columns,
+        rows,
+      }
+    })
   }
 
   getTableColumns(tableName: string): SqliteTableColumn[] {
@@ -267,7 +374,7 @@ export class FrontendSqliteDatabase {
 
     const columnNames = entries.map(([columnName]) => `"${escapeIdentifier(columnName)}"`)
     const placeholders = entries.map(() => '?')
-    const values = entries.map(([, value]) => value)
+    const values = entries.map(([, value]) => value) as SqlValue[]
 
     this.execute(
       `INSERT INTO "${escapeIdentifier(tableName)}" (${columnNames.join(', ')}) VALUES (${placeholders.join(', ')});`,
@@ -310,6 +417,7 @@ function escapeIdentifier(identifier: string): string {
 function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
   const normalizedName = column.name.toLowerCase()
   const normalizedType = column.type.toUpperCase()
+  const structuredKind = getStructuredColumnKind(column.type)
 
   if (normalizedName === '_archivedat') {
     return null
@@ -321,6 +429,18 @@ function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
 
   if (normalizedName.endsWith('_at')) {
     return new Date().toISOString()
+  }
+
+  if (structuredKind !== null && !column.notnull) {
+    return null
+  }
+
+  if (structuredKind === 'array') {
+    return '[]'
+  }
+
+  if (structuredKind === 'object' || structuredKind === 'record') {
+    return '{}'
   }
 
   if (normalizedType.includes('INT')) {
@@ -340,9 +460,14 @@ function createDefaultValueForColumn(column: SqliteTableColumn): SqlValue {
 
 function coerceInputValue(column: SqliteTableColumn, rawValue: string): SqlValue {
   const normalizedType = column.type.toUpperCase()
+  const structuredKind = getStructuredColumnKind(column.type)
 
   if (rawValue.length === 0 && !column.notnull) {
     return null
+  }
+
+  if (structuredKind !== null) {
+    return parseStructuredInput(structuredKind, rawValue, column.name)
   }
 
   if (normalizedType.includes('INT')) {
@@ -517,7 +642,10 @@ export class OpfsDatabase {
         columns,
         rows: rawRows.map((row) => {
           const { __rowid__, ...values } = row
-          return { rowId: Number(__rowid__), values }
+          return {
+            rowId: Number(__rowid__),
+            values: decodeRowValues(values, columns),
+          }
         }),
       })
     }
@@ -656,11 +784,14 @@ export class SyncDatabaseAdapter implements AsyncSqliteDatabase {
     return this.#db.version
   }
 
-  async execute(sql: string, bind?: BindingSpec): Promise<void> {
+  async execute(sql: string, bind?: BindingSpec | SqlValue[]): Promise<void> {
     this.#db.execute(sql, bind)
   }
 
-  async query<TRow extends object = SqliteRow>(sql: string, bind?: BindingSpec): Promise<TRow[]> {
+  async query<TRow extends object = SqliteRow>(
+    sql: string,
+    bind?: BindingSpec | SqlValue[],
+  ): Promise<TRow[]> {
     return this.#db.query<TRow>(sql, bind)
   }
 
@@ -747,4 +878,3 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
     persistenceType: 'memory',
   }
 }
-
