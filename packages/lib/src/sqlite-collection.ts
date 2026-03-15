@@ -623,9 +623,16 @@ export async function createSqliteCollection<
     TKey,
     TIndexes
   >;
+  const baseUpdate = baseCollection.update.bind(baseCollection) as (
+    key: string | number,
+    updater: (draft: TRow) => void,
+  ) => void;
+  const baseDelete = baseCollection.delete.bind(baseCollection) as (
+    key: string | number,
+  ) => void;
 
   collection.update = ((key, updater) =>
-    (baseCollection.update as any)(
+    baseUpdate(
       options.serializeKey(key),
       updater,
     )) as SqliteCollection<
@@ -635,7 +642,7 @@ export async function createSqliteCollection<
   >["update"];
 
   collection.delete = ((key) =>
-    (baseCollection.delete as any)(
+    baseDelete(
       options.serializeKey(key),
     )) as SqliteCollection<
     TRow,

@@ -157,7 +157,7 @@ function App() {
   }, [selectedRowKeys, selectedTable, tableRows])
 
   const handleSelectionChange = useCallback((rowKeys: Set<string>) => {
-    setSelectedRowKeys(rowKeys)
+    setSelectedRowKeys(new Set(rowKeys))
   }, [])
 
   // Get reference columns for the selected table
@@ -178,6 +178,7 @@ function App() {
   // Clear query result when table changes
   useEffect(() => {
     setQueryResult(null)
+    setSelectedRowKeys(new Set())
   }, [selectedTableName])
 
   // Load indexes for selected table
@@ -296,6 +297,43 @@ function App() {
           },
     )
   }, [])
+
+  const handleDeleteSelected = useCallback(async (rowKeys: string[]) => {
+    if (workspace === null || selectedTable === undefined || rowKeys.length === 0) return
+
+    const tableName = selectedTable.name as SqliteDemoTableName
+    const keySet = new Set(rowKeys)
+    const rowsToDelete = tableRows.filter((row) =>
+      keySet.has(
+        serializeSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row)),
+      ),
+    )
+
+    if (rowsToDelete.length === 0) {
+      return
+    }
+
+    const confirmed = globalThis.confirm?.(
+      `Delete ${rowsToDelete.length} selected ${rowsToDelete.length === 1 ? 'document' : 'documents'} from ${tableName}?`,
+    ) ?? true
+
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      await workspace.deleteRows(
+        tableName,
+        rowsToDelete.map((row) => getSqliteDemoRowKey(tableName, row)),
+      )
+      await refreshSnapshot(workspace)
+      setQueryResult(null)
+      setSelectedRowKeys(new Set())
+      setActionError(null)
+    } catch (error) {
+      setActionError(formatUnknownError(error))
+    }
+  }, [refreshSnapshot, selectedTable, tableRows, workspace])
 
   const persistenceBadgeVariant = workspace?.persistenceType === 'opfs'
     ? 'default'
@@ -432,8 +470,10 @@ function App() {
             queryResult={queryResult}
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
+            onDeleteSelected={handleDeleteSelected}
             onRunQuery={handleRunQuery}
             onSelectionChange={handleSelectionChange}
+            selectedRowKeys={selectedRowKeys}
           />
 
           {/* Right Sidebar - Schema/Indexes/Document */}

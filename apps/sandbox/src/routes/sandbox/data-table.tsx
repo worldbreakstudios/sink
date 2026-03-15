@@ -242,8 +242,10 @@ export function DataTable({
   queryResult,
   onCellEdit,
   onAddRow,
+  onDeleteSelected,
   onRunQuery,
   onSelectionChange,
+  selectedRowKeys,
 }: {
   tableName: string
   columns: { name: string; type: string; pk?: number; notnull?: number }[]
@@ -252,8 +254,10 @@ export function DataTable({
   queryResult: QueryResult | null
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
+  onDeleteSelected?: (rowKeys: string[]) => Promise<void>
   onRunQuery: (query: QueryState) => Promise<void>
   onSelectionChange?: (selectedIds: Set<string>) => void
+  selectedRowKeys: Set<string>
 }) {
   // Get reference columns for validator display
   const referenceColumns = useMemo(() => {
@@ -290,22 +294,10 @@ export function DataTable({
   const [isRunning, setIsRunning] = useState(false)
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Value viewer modal state
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
-
-  // Multi-select state
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
-
-  // Clear selection when table changes
-  useEffect(() => {
-    setSelectedRowIds(new Set())
-  }, [tableName])
-
-  // Notify parent of selection changes
-  useEffect(() => {
-    onSelectionChange?.(selectedRowIds)
-  }, [selectedRowIds, onSelectionChange])
 
   // Display either query results or default rows
   const displayRows = queryResult?.rows ?? rows
@@ -322,28 +314,40 @@ export function DataTable({
 
   // Selection helpers
   const toggleRowSelection = useCallback((rowKey: string) => {
-    setSelectedRowIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(rowKey)) {
-        next.delete(rowKey)
-      } else {
-        next.add(rowKey)
-      }
-      return next
-    })
-  }, [])
+    const next = new Set(selectedRowKeys)
+    if (next.has(rowKey)) {
+      next.delete(rowKey)
+    } else {
+      next.add(rowKey)
+    }
+    onSelectionChange?.(next)
+  }, [onSelectionChange, selectedRowKeys])
 
   const toggleAllSelection = useCallback(() => {
-    setSelectedRowIds((prev) => {
-      if (prev.size === displayRows.length) {
-        return new Set()
-      }
-      return new Set(displayRows.map((row) => getSerializedRowId(row)))
-    })
-  }, [displayRows, getSerializedRowId])
+    if (selectedRowKeys.size === displayRows.length) {
+      onSelectionChange?.(new Set())
+      return
+    }
 
-  const isAllSelected = displayRows.length > 0 && selectedRowIds.size === displayRows.length
-  const isSomeSelected = selectedRowIds.size > 0 && selectedRowIds.size < displayRows.length
+    onSelectionChange?.(new Set(displayRows.map((row) => getSerializedRowId(row))))
+  }, [displayRows, getSerializedRowId, onSelectionChange, selectedRowKeys.size])
+
+  const isAllSelected = displayRows.length > 0 && selectedRowKeys.size === displayRows.length
+  const isSomeSelected = selectedRowKeys.size > 0 && selectedRowKeys.size < displayRows.length
+
+  const handleDeleteSelectedClick = useCallback(async () => {
+    if (!onDeleteSelected || selectedRowKeys.size === 0) {
+      return
+    }
+
+    setIsDeleting(true)
+
+    try {
+      await onDeleteSelected(Array.from(selectedRowKeys))
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [onDeleteSelected, selectedRowKeys])
 
   const defaultColumnNames = useMemo(() => columns.map((column) => column.name), [columns])
 
@@ -714,6 +718,26 @@ export function DataTable({
               Clear filter
             </Button>
           )}
+          {selectedRowKeys.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDeleteSelectedClick}
+              disabled={isDeleting}
+              className="border-red-500/40 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+              {isDeleting
+                ? 'Deleting...'
+                : `Delete ${selectedRowKeys.size === 1 ? '1 document' : `${selectedRowKeys.size} documents`}`}
+            </Button>
+          )}
           <Button size="sm" onClick={() => { setEditingCell(null); onAddRow() }}>
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
               <path d="M5 12h14" />
@@ -1051,7 +1075,7 @@ export function DataTable({
               {displayRows.map((row) => {
                 const rowId = getRowId(row)
                 const rowKey = getSerializedRowId(row)
-                const isRowSelected = selectedRowIds.has(rowKey)
+                const isRowSelected = selectedRowKeys.has(rowKey)
 
                 return (
                   <TableRow

@@ -42,6 +42,10 @@ export interface SqliteDemoCollectionsWorkspace {
     draft: SqliteInsertDraft,
     transaction: ReturnType<typeof createBatchTransaction>,
   ) => Promise<void>
+  deleteRows: (
+    tableName: SqliteDemoTableName,
+    keys: SqliteDemoId[],
+  ) => Promise<void>
   updateCell: (
     tableName: SqliteDemoTableName,
     key: SqliteDemoId,
@@ -54,6 +58,7 @@ export interface SqliteDemoCollectionsWorkspace {
 
 interface MutableSqliteDemoCollection {
   insert: (row: AnyRow) => void
+  delete: (key: SqliteDemoId) => void
   update: (
     key: SqliteDemoId,
     callback: (draft: Record<string, unknown>) => void,
@@ -367,6 +372,21 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       transaction.mutate(() => {
         getCollection(collections, tableName).insert(row)
       })
+    },
+    async deleteRows(tableName, keys) {
+      if (keys.length === 0) {
+        return
+      }
+
+      const transaction = makeBatchTx()
+
+      transaction.mutate(() => {
+        for (const key of keys) {
+          getCollection(collections, tableName).delete(key)
+        }
+      })
+
+      await transaction.isPersisted.promise
     },
     async updateCell(tableName, key, columnName, value) {
       const typedValue = await database.coerceTableValue(tableName, columnName, value)
