@@ -224,31 +224,35 @@ function App() {
   const handleAddRow = useCallback(async () => {
     if (workspace === null || selectedTable === undefined) return
 
-    setActionError(null)
-    const tableName = selectedTable.name as SqliteDemoTableName
-    const transaction = workspace.createBatchTransaction({ autoCommit: false })
-    const draft = await workspace.createInsertDraft(tableName)
+    try {
+      setActionError(null)
+      const tableName = selectedTable.name as SqliteDemoTableName
+      const transaction = workspace.createBatchTransaction({ autoCommit: false })
+      const draft = await workspace.createInsertDraft(tableName)
 
-    // Pre-load reference rows for FK columns
-    const referenceRows: Record<string, SqliteDemoRow[]> = {}
-    const tableSnapshot = tables.find((t) => t.name === tableName)
-    if (tableSnapshot) {
-      for (const column of tableSnapshot.columns) {
-        const refCol = workspace.getReferenceColumn(tableName, column.name)
-        if (refCol) {
-          referenceRows[column.name] = await workspace.readRows(
-            refCol.referencedTable as SqliteDemoTableName,
-          )
+      // Pre-load reference rows for FK columns
+      const referenceRows: Record<string, SqliteDemoRow[]> = {}
+      const tableSnapshot = tables.find((t) => t.name === tableName)
+      if (tableSnapshot) {
+        for (const column of tableSnapshot.columns) {
+          const refCol = workspace.getReferenceColumn(tableName, column.name)
+          if (refCol) {
+            referenceRows[column.name] = await workspace.readRows(
+              refCol.referencedTable as SqliteDemoTableName,
+            )
+          }
         }
       }
-    }
 
-    setInsertModal({
-      tableName,
-      draft,
-      transaction,
-      referenceRows,
-    })
+      setInsertModal({
+        tableName,
+        draft,
+        transaction,
+        referenceRows,
+      })
+    } catch (error) {
+      setActionError(formatUnknownError(error))
+    }
   }, [selectedTable, tables, workspace])
 
   const handleInsertSubmit = useCallback(async () => {
