@@ -19,6 +19,7 @@ import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
   CreateTableModal,
   DataTable,
+  DeleteRowsModal,
   InsertRowModal,
   type InsertModalState,
   parseValue,
@@ -75,6 +76,12 @@ function App() {
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
+  const [deleteModal, setDeleteModal] = useState<{
+    tableName: SqliteDemoTableName
+    count: number
+    keys: SqliteDemoId[]
+  } | null>(null)
+  const [isDeletingRows, setIsDeletingRows] = useState(false)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -179,6 +186,7 @@ function App() {
   useEffect(() => {
     setQueryResult(null)
     setSelectedRowKeys(new Set())
+    setDeleteModal(null)
   }, [selectedTableName])
 
   // Load indexes for selected table
@@ -299,7 +307,7 @@ function App() {
   }, [])
 
   const handleDeleteSelected = useCallback(async (rowKeys: string[]) => {
-    if (workspace === null || selectedTable === undefined || rowKeys.length === 0) return
+    if (selectedTable === undefined || rowKeys.length === 0) return
 
     const tableName = selectedTable.name as SqliteDemoTableName
     const keySet = new Set(rowKeys)
@@ -313,27 +321,39 @@ function App() {
       return
     }
 
-    const confirmed = globalThis.confirm?.(
-      `Delete ${rowsToDelete.length} selected ${rowsToDelete.length === 1 ? 'document' : 'documents'} from ${tableName}?`,
-    ) ?? true
+    setDeleteModal({
+      tableName,
+      count: rowsToDelete.length,
+      keys: rowsToDelete.map((row) => getSqliteDemoRowKey(tableName, row)),
+    })
+  }, [selectedTable, tableRows])
 
-    if (!confirmed) {
+  const handleDeleteModalClose = useCallback(() => {
+    if (isDeletingRows) {
       return
     }
 
+    setDeleteModal(null)
+  }, [isDeletingRows])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (workspace === null || deleteModal === null) return
+
+    setIsDeletingRows(true)
+
     try {
-      await workspace.deleteRows(
-        tableName,
-        rowsToDelete.map((row) => getSqliteDemoRowKey(tableName, row)),
-      )
+      await workspace.deleteRows(deleteModal.tableName, deleteModal.keys)
       await refreshSnapshot(workspace)
       setQueryResult(null)
       setSelectedRowKeys(new Set())
+      setDeleteModal(null)
       setActionError(null)
     } catch (error) {
       setActionError(formatUnknownError(error))
+    } finally {
+      setIsDeletingRows(false)
     }
-  }, [refreshSnapshot, selectedTable, tableRows, workspace])
+  }, [deleteModal, refreshSnapshot, workspace])
 
   const persistenceBadgeVariant = workspace?.persistenceType === 'opfs'
     ? 'default'
@@ -502,6 +522,20 @@ function App() {
       <CreateTableModal
         open={createTableModalOpen}
         onClose={() => setCreateTableModalOpen(false)}
+      />
+
+      <DeleteRowsModal
+        modal={
+          deleteModal
+            ? {
+                tableName: deleteModal.tableName,
+                count: deleteModal.count,
+              }
+            : null
+        }
+        isDeleting={isDeletingRows}
+        onClose={handleDeleteModalClose}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
     </HotkeysProvider>
