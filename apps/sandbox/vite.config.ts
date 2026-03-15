@@ -37,7 +37,11 @@ const config = defineConfig({
     }),
     tsconfigPaths({ projects: ['./tsconfig.json'] }),
     tailwindcss(),
-    tanstackStart(),
+    tanstackStart({
+      router: {
+        routeFileIgnorePattern: '^sandbox$',
+      },
+    }),
     viteReact(),
   ],
 })
