@@ -63,6 +63,104 @@ export type SqliteCollection<
   query(): SqliteQueryInitializer<TRow, TIndexes>;
 };
 
+type ChannelEventListener<TEvent> = (event: TEvent) => void;
+
+export interface ChannelEventBus<TEvent> {
+  publish(channel: string, event: TEvent): void;
+  subscribe(
+    channel: string,
+    listener: ChannelEventListener<TEvent>,
+  ): () => void;
+}
+
+export interface SqliteMutationChange {
+  before: unknown;
+  after: unknown;
+}
+
+export interface SqliteMutationRowDiff {
+  rowIndex: number;
+  changeType: "inserted" | "updated" | "deleted" | "unchanged";
+  changes: Record<string, SqliteMutationChange>;
+}
+
+export interface SqliteMutationEvent {
+  channel: string;
+  tableName: string;
+  collectionId: string;
+  mutationType: PendingMutation<Record<string, unknown>>["type"];
+  keyColumn: string;
+  key: string | number;
+  snapshotSql: string;
+  whereClause: string;
+  whereBind: Array<string | number>;
+  beforeRows: Array<Record<string, unknown>>;
+  afterRows: Array<Record<string, unknown>>;
+  rowDiffs: SqliteMutationRowDiff[];
+  publishedAt: number;
+}
+
+function createChannelEventBus<TEvent>(): ChannelEventBus<TEvent> {
+  const listenersByChannel = new Map<
+    string,
+    Set<ChannelEventListener<TEvent>>
+  >();
+
+  return {
+    publish(channel, event) {
+      const listeners = listenersByChannel.get(channel);
+
+      if (!listeners) {
+        return;
+      }
+
+      for (const listener of Array.from(listeners)) {
+        try {
+          listener(event);
+        } catch (error) {
+          console.error("Failed to handle event bus message.", error);
+        }
+      }
+    },
+    subscribe(channel, listener) {
+      const listeners = listenersByChannel.get(channel) ?? new Set();
+      listeners.add(listener);
+      listenersByChannel.set(channel, listeners);
+
+      return () => {
+        const currentListeners = listenersByChannel.get(channel);
+
+        if (!currentListeners) {
+          return;
+        }
+
+        currentListeners.delete(listener);
+
+        if (currentListeners.size === 0) {
+          listenersByChannel.delete(channel);
+        }
+      };
+    },
+  };
+}
+
+export const sqliteMutationEventBus =
+  createChannelEventBus<SqliteMutationEvent>();
+
+export function getSqliteMutationChannel(tableName: string): string {
+  return tableName;
+}
+
+export function subscribeToSqliteMutationEvents(
+  tableName: string,
+  listener: ChannelEventListener<SqliteMutationEvent>,
+): () => void {
+  return sqliteMutationEventBus.subscribe(
+    getSqliteMutationChannel(tableName),
+    listener,
+  );
+}
+
 type Head<TFields extends readonly string[]> = TFields extends readonly [
   infer THead extends string,
   ...(readonly string[]),
@@ -383,7 +481,7 @@ export async function createSqliteCollection<
       return;
     }
 
-    await persistSqliteMutations(
+    const mutationEvents = await persistSqliteMutations(
       options as unknown as CreateSqliteCollectionOptions<
         TRow,
         string | number,
@@ -398,6 +496,10 @@ export async function createSqliteCollection<
         PendingMutation<Record<string, unknown>>
       >,
     });
+
+    for (const mutationEvent of mutationEvents) {
+      logMutationDiff(mutationEvent);
+    }
   };
 
   const createSqliteTransaction = (
@@ -538,15 +640,20 @@ async function persistSqliteMutations<TRow extends object>(
   mutations: Array<PendingMutation<TRow>>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
-): Promise<void> {
+): Promise<SqliteMutationEvent[]> {
+  const mutationEvents: SqliteMutationEvent[] = [];
+
   await options.database.execute("BEGIN");
 
   try {
     for (const mutation of mutations) {
-      await applyMutation(options, mutation, columnNames, structuredColumns);
+      mutationEvents.push(
+        await applyMutation(options, mutation, columnNames, structuredColumns),
+      );
     }
 
     await options.database.execute("COMMIT");
+    return mutationEvents;
   } catch (error) {
     try {
       await options.database.execute("ROLLBACK");
@@ -563,7 +670,7 @@ async function applyMutation<TRow extends object>(
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
-): Promise<void> {
+): Promise<SqliteMutationEvent> {
   const snapshotQuery = buildMutationSnapshotQuery(options, mutation.key);
   const beforeRows = await queryMutationRows(
     options.database,
@@ -593,19 +700,19 @@ async function applyMutation<TRow extends object>(
     snapshotQuery,
     structuredColumns,
   );
-  logMutationDiff(options, mutation, snapshotQuery, beforeRows, afterRows);
+  return createMutationEvent(
+    options,
+    mutation,
+    snapshotQuery,
+    beforeRows,
+    afterRows,
+  );
 }
 
 interface MutationSnapshotQuery {
   sql: string;
   whereClause: string;
   bind: Array<string | number>;
-}
-
-interface MutationRowDiff {
-  rowIndex: number;
-  changeType: "inserted" | "updated" | "deleted" | "unchanged";
-  changes: Record<string, { before: unknown; after: unknown }>;
 }
 
 function buildMutationSnapshotQuery<TRow extends object>(
@@ -636,32 +743,43 @@ async function queryMutationRows(
   return rows.map((row) => deserializeRowValues(row, structuredColumns));
 }
 
-function logMutationDiff<TRow extends object>(
+function createMutationEvent<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   snapshotQuery: MutationSnapshotQuery,
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
-): void {
+) : SqliteMutationEvent {
   const rowDiffs = buildMutationRowDiffs(beforeRows, afterRows);
-  console.log({
+
+  return {
+    channel: getSqliteMutationChannel(options.tableName),
     tableName: options.tableName,
+    collectionId: options.id,
     mutationType: mutation.type,
     keyColumn: options.keyColumn,
     key: mutation.key,
     snapshotSql: snapshotQuery.sql,
     whereClause: snapshotQuery.whereClause,
     whereBind: snapshotQuery.bind,
+    beforeRows,
+    afterRows,
     rowDiffs,
-  });
+    publishedAt: Date.now(),
+  };
+}
+
+function logMutationDiff(event: SqliteMutationEvent): void {
+  console.log(event);
+  sqliteMutationEventBus.publish(event.channel, event);
 }
 
 function buildMutationRowDiffs(
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
-): MutationRowDiff[] {
+): SqliteMutationRowDiff[] {
   const rowCount = Math.max(beforeRows.length, afterRows.length);
-  const diffs: MutationRowDiff[] = [];
+  const diffs: SqliteMutationRowDiff[] = [];
 
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
     const beforeRow = beforeRows[rowIndex];
@@ -688,8 +806,8 @@ function buildMutationRowDiffs(
 function diffRowValues(
   beforeRow: Record<string, unknown> | undefined,
   afterRow: Record<string, unknown> | undefined,
-): Record<string, { before: unknown; after: unknown }> {
-  const changes: Record<string, { before: unknown; after: unknown }> = {};
+): Record<string, SqliteMutationChange> {
+  const changes: Record<string, SqliteMutationChange> = {};
   const keys = new Set([
     ...Object.keys(beforeRow ?? {}),
     ...Object.keys(afterRow ?? {}),
@@ -699,7 +817,7 @@ function diffRowValues(
     const beforeValue = beforeRow?.[key];
     const afterValue = afterRow?.[key];
 
-    if (Object.is(beforeValue, afterValue)) {
+    if (areMutationValuesEqual(beforeValue, afterValue)) {
       continue;
     }
 
@@ -710,6 +828,41 @@ function diffRowValues(
   }
 
   return changes;
+}
+
+function areMutationValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((value, index) =>
+      areMutationValuesEqual(value, right[index]),
+    );
+  }
+
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+
+    return leftKeys.every((key) => {
+      if (!Object.prototype.hasOwnProperty.call(right, key)) {
+        return false;
+      }
+
+      return areMutationValuesEqual(left[key], right[key]);
+    });
+  }
+
+  return false;
 }
 
 async function insertRow<TRow extends object>(
