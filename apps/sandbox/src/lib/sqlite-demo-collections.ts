@@ -2,22 +2,25 @@ import type { TransactionConfig } from '@tanstack/db'
 import type { AsyncSqliteDatabase, PersistenceType, SqliteReferenceColumn } from '@sink/lib'
 import { createDatabase } from '@sink/lib'
 import {
+  KEY_COLUMNS,
   REFERENCE_COLUMNS,
   createAllTables,
   createBatchTransaction,
   createCollections,
 } from '@/data/generated/schema.gen'
 import type {
+  AnyKey,
   AnyRow,
-  Id,
+  KeyByTable,
   SchemaCollections,
   TableName,
 } from '@/data/generated/schema.gen'
 
 export type SqliteDemoRow = AnyRow
-export type SqliteDemoId = Id<TableName>
+export type SqliteDemoId = AnyKey
 export type SqliteDemoTableName = TableName
 export type SqliteInsertDraft = Record<string, string>
+export type SqliteDemoKeyByTable = KeyByTable
 
 export interface SqliteDemoCollectionsWorkspace {
   database: AsyncSqliteDatabase
@@ -66,6 +69,59 @@ function getCollection(
   return collections[tableName] as unknown as MutableSqliteDemoCollection
 }
 
+export function getSqliteDemoRowKey<TTableName extends SqliteDemoTableName>(
+  tableName: TTableName,
+  row: SqliteDemoRow,
+): SqliteDemoKeyByTable[TTableName] {
+  const keyColumns = KEY_COLUMNS[tableName]
+  const rowRecord = row as unknown as Record<string, unknown>
+
+  if (keyColumns.length === 1) {
+    const keyColumn = keyColumns[0]
+    return rowRecord[keyColumn] as SqliteDemoKeyByTable[TTableName]
+  }
+
+  return Object.fromEntries(
+    keyColumns.map((columnName) => [columnName, rowRecord[columnName]]),
+  ) as unknown as SqliteDemoKeyByTable[TTableName]
+}
+
+export function serializeSqliteDemoKey(
+  tableName: SqliteDemoTableName,
+  key: SqliteDemoId,
+): string {
+  const keyColumns = KEY_COLUMNS[tableName]
+
+  if (keyColumns.length === 1 && (typeof key === 'string' || typeof key === 'number' || typeof key === 'bigint')) {
+    return String(key)
+  }
+
+  const keyRecord = key as unknown as Record<string, unknown>
+
+  return JSON.stringify(
+    keyColumns.map((columnName) => [columnName, keyRecord[columnName] ?? null]),
+  )
+}
+
+export function formatSqliteDemoKey(
+  tableName: SqliteDemoTableName,
+  key: SqliteDemoId,
+): string {
+  const keyColumns = KEY_COLUMNS[tableName]
+
+  if (keyColumns.length === 1 && (typeof key === 'string' || typeof key === 'number' || typeof key === 'bigint')) {
+    return String(key)
+  }
+
+  const keyRecord = key as unknown as Record<string, unknown>
+
+  return keyColumns
+    .map((columnName) => `${columnName}=${String(keyRecord[columnName] ?? '')}`)
+    .join(' ')
+}
+
+const aliceActorId = '0d3cf6b9c81d41c8b8ad84c3550d0e62'
+const bobActorId = 'c24370ab27aa4a7d9a2f6d679c5f9d08'
 const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
 const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
 const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
@@ -87,6 +143,10 @@ const demoCreatedAt = 1709748840000n
 const demoUpdatedAt = 1709748900000n
 
 async function seedCoreData(db: AsyncSqliteDatabase): Promise<void> {
+  await db.execute(
+    `INSERT INTO actors (_id) VALUES (?), (?);`,
+    [aliceActorId, bobActorId],
+  )
 
   await db.execute(
     `INSERT INTO fieldTypes (_id, name) VALUES (?, ?), (?, ?), (?, ?);`,
@@ -99,16 +159,20 @@ async function seedCoreData(db: AsyncSqliteDatabase): Promise<void> {
   )
 
   await db.execute(
-    `INSERT INTO objects (_id, _createdAt, type_id) VALUES (?, ?, ?), (?, ?, ?);`,
-    [inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId, taskObjectId, taskObjectCreatedAt, taskObjectTypeId],
+    `INSERT INTO objects (_actor, _id, _createdAt, type_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?);`,
+    [
+      aliceActorId, inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId,
+      aliceActorId, taskObjectId, taskObjectCreatedAt, taskObjectTypeId,
+      bobActorId, inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId,
+    ],
   )
 
   await db.execute(
-    `INSERT INTO fields (_id, _createdAt, object_id, field_type_id, name, body) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?);`,
+    `INSERT INTO fields (_actor, _id, _createdAt, object_id, field_type_id, name, body) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?);`,
     [
-      titleFieldId, titleFieldCreatedAt, inboxObjectId, textFieldTypeId, 'title', 'Welcome note title',
-      bodyFieldId, bodyFieldCreatedAt, inboxObjectId, richTextFieldTypeId, 'body', 'Initial sandbox note body',
-      statusFieldId, statusFieldCreatedAt, taskObjectId, statusFieldTypeId, 'status', 'open',
+      aliceActorId, titleFieldId, titleFieldCreatedAt, inboxObjectId, textFieldTypeId, 'title', 'Welcome note title',
+      aliceActorId, bodyFieldId, bodyFieldCreatedAt, inboxObjectId, richTextFieldTypeId, 'body', 'Initial sandbox note body',
+      aliceActorId, statusFieldId, statusFieldCreatedAt, taskObjectId, statusFieldTypeId, 'status', 'open',
     ],
   )
 }
@@ -116,6 +180,7 @@ async function seedCoreData(db: AsyncSqliteDatabase): Promise<void> {
 async function seedCodegenDemoTable(db: AsyncSqliteDatabase): Promise<void> {
   await db.execute(
     `INSERT INTO demos (
+      _actor,
       _id,
       _createdAt,
       _updatedAt,
@@ -136,8 +201,9 @@ async function seedCodegenDemoTable(db: AsyncSqliteDatabase): Promise<void> {
       default_flags,
       optional_notes,
       optional_feature_toggles
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
+      aliceActorId,
       demoRowId,
       demoCreatedAt,
       demoUpdatedAt,
@@ -194,7 +260,7 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
   // Create database with OPFS as default, localStorage as fallback
   const { database, persistenceType } = await createDatabase({
     preferredPersistence: 'opfs',
-    opfsFilename: 'sqlite-demo.db',
+    opfsFilename: 'sqlite-demo-actors.db',
   })
 
   // Create tables
@@ -238,6 +304,12 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
     createBatchTransaction: makeBatchTx,
     async createInsertDraft(tableName) {
       const row = await database.createInsertableRow(tableName)
+      const rowRecord = row as unknown as Record<string, unknown>
+
+      if ('_actor' in rowRecord && (!rowRecord._actor || rowRecord._actor === '')) {
+        const actorRows = await getCollection(collections, 'actors').utils.readAll()
+        rowRecord._actor = actorRows[0]?._id ?? ''
+      }
 
       for (const [columnName, config] of Object.entries(
         REFERENCE_COLUMNS[tableName],
@@ -250,7 +322,13 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
           collections,
           config.referencedTable as SqliteDemoTableName,
         ).utils.readAll()
-        row[columnName] = referencedRows[0]?._id ?? ''
+        const actorScopedRows = config.actorScoped && typeof rowRecord._actor === 'string'
+          ? referencedRows.filter((candidate) => {
+              const candidateRecord = candidate as unknown as Record<string, unknown>
+              return candidateRecord._actor === rowRecord._actor
+            })
+          : referencedRows
+        rowRecord[columnName] = actorScopedRows[0]?._id ?? ''
       }
 
       return Object.fromEntries(
@@ -290,6 +368,12 @@ export async function createSqliteDemoCollectionsWorkspace(): Promise<SqliteDemo
       const newRow = await database.createInsertableRow(
         tableName,
       ) as unknown as AnyRow
+      const newRowRecord = newRow as unknown as Record<string, unknown>
+
+      if ('_actor' in newRowRecord && (!newRowRecord._actor || newRowRecord._actor === '')) {
+        const actorRows = await getCollection(collections, 'actors').utils.readAll()
+        newRowRecord._actor = actorRows[0]?._id ?? ''
+      }
 
       transaction.mutate(() => {
         getCollection(collections, tableName).insert(newRow)

@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   createSqliteDemoCollectionsWorkspace,
+  getSqliteDemoRowKey,
+  serializeSqliteDemoKey,
   type SqliteDemoCollectionsWorkspace,
   type SqliteDemoId,
   type SqliteDemoRow,
@@ -32,6 +34,31 @@ export const Route = createFileRoute('/')({
   component: App,
 })
 
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+
+  if (typeof error === 'string') {
+    return error
+  }
+
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
 function App() {
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
@@ -47,7 +74,7 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -81,7 +108,7 @@ function App() {
     loadDemo().catch((error: unknown) => {
       setSqliteState({
         status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown SQLite error',
+        error: formatUnknownError(error),
       })
     })
   }, [loadDemo])
@@ -109,8 +136,8 @@ function App() {
   )
 
   const selectedRowsQuery = useLiveQuery(
-    () => selectedCollection,
-    [selectedCollection],
+    () => selectedCollection as never,
+    [selectedCollection as never],
   )
 
   const tableRows = useMemo(
@@ -120,12 +147,17 @@ function App() {
 
   // Get the actual selected document objects from the IDs
   const selectedDocuments = useMemo(() => {
-    if (selectedRowIds.size === 0) return []
-    return tableRows.filter((row) => selectedRowIds.has(row._id))
-  }, [tableRows, selectedRowIds])
+    if (selectedRowKeys.size === 0 || selectedTable === undefined) return []
+    const tableName = selectedTable.name as SqliteDemoTableName
+    return tableRows.filter((row) =>
+      selectedRowKeys.has(
+        serializeSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row)),
+      ),
+    )
+  }, [selectedRowKeys, selectedTable, tableRows])
 
-  const handleSelectionChange = useCallback((ids: Set<SqliteDemoId>) => {
-    setSelectedRowIds(ids)
+  const handleSelectionChange = useCallback((rowKeys: Set<string>) => {
+    setSelectedRowKeys(rowKeys)
   }, [])
 
   // Get reference columns for the selected table
@@ -183,11 +215,7 @@ function App() {
         await refreshSnapshot(workspace)
         setActionError(null)
       } catch (error) {
-        setActionError(
-          error instanceof Error
-            ? error.message
-            : 'Unable to update SQLite cell.',
-        )
+        setActionError(formatUnknownError(error))
       }
     },
     [refreshSnapshot, selectedTable, workspace],
@@ -237,9 +265,7 @@ function App() {
       setActionError(null)
       setInsertModal(null)
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Unable to insert SQLite row.',
-      )
+      setActionError(formatUnknownError(error))
       setInsertModal({
         tableName: insertModal.tableName,
         draft: insertModal.draft,
@@ -324,7 +350,7 @@ function App() {
       setQueryResult({
         rows: [],
         executionTime: 0,
-        error: err instanceof Error ? err.message : 'Query failed',
+        error: formatUnknownError(err),
       })
     }
   }, [workspace, selectedTable])

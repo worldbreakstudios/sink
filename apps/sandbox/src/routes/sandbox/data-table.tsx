@@ -32,7 +32,12 @@ import {
   REFERENCE_COLUMNS,
   SCHEMA_VALIDATORS,
 } from '@/data/generated/schema.gen'
-import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import {
+  getSqliteDemoRowKey,
+  serializeSqliteDemoKey,
+  type SqliteDemoId,
+  type SqliteDemoRow,
+} from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
 import {
@@ -248,7 +253,7 @@ export function DataTable({
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
   onRunQuery: (query: QueryState) => Promise<void>
-  onSelectionChange?: (selectedIds: Set<SqliteDemoId>) => void
+  onSelectionChange?: (selectedIds: Set<string>) => void
 }) {
   // Get reference columns for validator display
   const referenceColumns = useMemo(() => {
@@ -265,6 +270,7 @@ export function DataTable({
   }, [columns])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
+    rowKey: string
     columnName: string
     value: string
   } | null>(null)
@@ -289,7 +295,7 @@ export function DataTable({
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
 
   // Multi-select state
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
 
   // Clear selection when table changes
   useEffect(() => {
@@ -304,15 +310,24 @@ export function DataTable({
   // Display either query results or default rows
   const displayRows = queryResult?.rows ?? rows
   const isFiltered = queryResult !== null
+  const getRowId = useCallback(
+    (row: SqliteDemoRow) => getSqliteDemoRowKey(tableName as TableName, row),
+    [tableName],
+  )
+  const getSerializedRowId = useCallback(
+    (row: SqliteDemoRow) =>
+      serializeSqliteDemoKey(tableName as TableName, getRowId(row)),
+    [getRowId, tableName],
+  )
 
   // Selection helpers
-  const toggleRowSelection = useCallback((rowId: SqliteDemoId) => {
+  const toggleRowSelection = useCallback((rowKey: string) => {
     setSelectedRowIds((prev) => {
       const next = new Set(prev)
-      if (next.has(rowId)) {
-        next.delete(rowId)
+      if (next.has(rowKey)) {
+        next.delete(rowKey)
       } else {
-        next.add(rowId)
+        next.add(rowKey)
       }
       return next
     })
@@ -323,9 +338,9 @@ export function DataTable({
       if (prev.size === displayRows.length) {
         return new Set()
       }
-      return new Set(displayRows.map((r) => r._id))
+      return new Set(displayRows.map((row) => getSerializedRowId(row)))
     })
-  }, [displayRows])
+  }, [displayRows, getSerializedRowId])
 
   const isAllSelected = displayRows.length > 0 && selectedRowIds.size === displayRows.length
   const isSomeSelected = selectedRowIds.size > 0 && selectedRowIds.size < displayRows.length
@@ -1034,12 +1049,13 @@ export function DataTable({
             </TableHeader>
             <TableBody>
               {displayRows.map((row) => {
-                const rowId = row._id
-                const isRowSelected = selectedRowIds.has(rowId)
+                const rowId = getRowId(row)
+                const rowKey = getSerializedRowId(row)
+                const isRowSelected = selectedRowIds.has(rowKey)
 
                 return (
                   <TableRow
-                    key={`${tableName}-${rowId}`}
+                    key={`${tableName}-${rowKey}`}
                     className={cn(
                       'group',
                       isRowSelected && 'bg-accent',
@@ -1049,14 +1065,14 @@ export function DataTable({
                     <TableCell className="w-10 px-3">
                       <Checkbox
                         checked={isRowSelected}
-                        onCheckedChange={() => toggleRowSelection(rowId)}
+                        onCheckedChange={() => toggleRowSelection(rowKey)}
                         onClick={(e) => e.stopPropagation()}
-                        aria-label={`Select row ${rowId}`}
+                        aria-label={`Select row ${rowKey}`}
                       />
                     </TableCell>
                     {columnNames.map((columnName) => (
                       <TableCell
-                        key={`${tableName}-${rowId}-${columnName}`}
+                        key={`${tableName}-${rowKey}-${columnName}`}
                         className="font-mono text-xs"
                         style={{
                           width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
@@ -1064,7 +1080,7 @@ export function DataTable({
                           maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
                         }}
                       >
-                        {editingCell?.rowId === rowId &&
+                        {editingCell?.rowKey === rowKey &&
                         editingCell.columnName === columnName ? (
                           isMultilineColumn(columnName) ||
                           isStructuredColumnType(columnInfoMap[columnName]?.type ?? '') ? (
@@ -1074,6 +1090,7 @@ export function DataTable({
                               onChange={(event) =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: event.target.value,
                                 })
@@ -1090,6 +1107,7 @@ export function DataTable({
                               onChange={(event) =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: event.target.value,
                                 })
@@ -1125,6 +1143,7 @@ export function DataTable({
                               onEdit={() =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: formatCellValue(getRowValue(row, columnName)),
                                 })

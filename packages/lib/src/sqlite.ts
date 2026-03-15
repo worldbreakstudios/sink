@@ -8,6 +8,8 @@ import type {
 type StructuredColumnKind = 'array' | 'object' | 'record'
 
 export type SqliteRow = Record<string, unknown>
+export type SqliteCompositeKey = Record<string, SqlValue>
+export type SqliteKey = SqlValue | SqliteCompositeKey
 
 export interface SqliteTableRow {
   rowId: number
@@ -68,6 +70,49 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     value !== null &&
     !Array.isArray(value)
   )
+}
+
+function buildKeyWhereClause(
+  key: SqliteKey,
+  keyColumns: readonly string[],
+): { whereClause: string; bind: SqlValue[] } {
+  if (keyColumns.length === 0) {
+    throw new Error('At least one key column is required.')
+  }
+
+  if (keyColumns.length === 1 && !isPlainObject(key)) {
+    const keyColumn = keyColumns[0]
+
+    if (!keyColumn) {
+      throw new Error('Missing key column.')
+    }
+
+    return {
+      whereClause: `"${escapeIdentifier(keyColumn)}" = ?`,
+      bind: [key],
+    }
+  }
+
+  if (!isPlainObject(key)) {
+    throw new Error(
+      `Expected an object key with columns ${keyColumns.join(', ')}.`,
+    )
+  }
+
+  return {
+    whereClause: keyColumns
+      .map((columnName) => `"${escapeIdentifier(columnName)}" = ?`)
+      .join(' AND '),
+    bind: keyColumns.map((columnName) => {
+      const value = key[columnName]
+
+      if (value === undefined) {
+        throw new Error(`Missing key column "${columnName}".`)
+      }
+
+      return value as SqlValue
+    }),
+  }
 }
 
 function assertStructuredValue(
@@ -290,10 +335,15 @@ export class FrontendSqliteDatabase {
     }))
   }
 
-  rowExists(tableName: string, id: SqlValue, keyColumn = '_id'): boolean {
+  rowExists(
+    tableName: string,
+    key: SqliteKey,
+    keyColumns: readonly string[] = ['_id'],
+  ): boolean {
+    const predicate = buildKeyWhereClause(key, keyColumns)
     const result = this.query<{ matches: number }>(
-      `SELECT COUNT(*) AS matches FROM "${escapeIdentifier(tableName)}" WHERE "${escapeIdentifier(keyColumn)}" = ?;`,
-      [id],
+      `SELECT COUNT(*) AS matches FROM "${escapeIdentifier(tableName)}" WHERE ${predicate.whereClause};`,
+      predicate.bind,
     )
 
     return (result[0]?.matches ?? 0) > 0
@@ -320,7 +370,7 @@ export class FrontendSqliteDatabase {
     const row: SqliteRow = {}
 
     for (const column of columns) {
-      if (column.pk === 1) {
+      if (column.name === '_id') {
         row[column.name] = this.createPrimaryKeyValue(tableName, column)
         continue
       }
@@ -704,7 +754,7 @@ export class OpfsDatabase {
     const row: SqliteRow = {}
 
     for (const column of columns) {
-      if (column.pk === 1) {
+      if (column.name === '_id') {
         row[column.name] = await this.createPrimaryKeyValue(tableName, column)
         continue
       }
@@ -742,10 +792,15 @@ export class OpfsDatabase {
     await this.#promiser('close', { dbId: this.#dbId })
   }
 
-  async rowExists(tableName: string, id: SqlValue, keyColumn = '_id'): Promise<boolean> {
+  async rowExists(
+    tableName: string,
+    key: SqliteKey,
+    keyColumns: readonly string[] = ['_id'],
+  ): Promise<boolean> {
+    const predicate = buildKeyWhereClause(key, keyColumns)
     const result = await this.query<{ matches: number }>(
-      `SELECT COUNT(*) AS matches FROM "${escapeIdentifier(tableName)}" WHERE "${escapeIdentifier(keyColumn)}" = ?;`,
-      [id],
+      `SELECT COUNT(*) AS matches FROM "${escapeIdentifier(tableName)}" WHERE ${predicate.whereClause};`,
+      predicate.bind,
     )
 
     return (result[0]?.matches ?? 0) > 0
@@ -762,7 +817,7 @@ export interface AsyncSqliteDatabase {
   query<TRow extends object = SqliteRow>(sql: string, bind?: BindingSpec | SqlValue[]): Promise<TRow[]>
   getTableColumns(tableName: string): Promise<SqliteTableColumn[]>
   getTableIndexes(tableName: string): Promise<SqliteIndexSnapshot[]>
-  rowExists(tableName: string, id: SqlValue, keyColumn?: string): Promise<boolean>
+  rowExists(tableName: string, key: SqliteKey, keyColumns?: readonly string[]): Promise<boolean>
   coerceTableValue(tableName: string, columnName: string, rawValue: string): Promise<SqlValue>
   createInsertableRow(tableName: string): Promise<SqliteRow>
   inspectTables(limit?: number): Promise<SqliteTableSnapshot[]>
@@ -803,8 +858,12 @@ export class SyncDatabaseAdapter implements AsyncSqliteDatabase {
     return this.#db.getTableIndexes(tableName)
   }
 
-  async rowExists(tableName: string, id: SqlValue, keyColumn = '_id'): Promise<boolean> {
-    return this.#db.rowExists(tableName, id, keyColumn)
+  async rowExists(
+    tableName: string,
+    key: SqliteKey,
+    keyColumns: readonly string[] = ['_id'],
+  ): Promise<boolean> {
+    return this.#db.rowExists(tableName, key, keyColumns)
   }
 
   async coerceTableValue(tableName: string, columnName: string, rawValue: string): Promise<SqlValue> {

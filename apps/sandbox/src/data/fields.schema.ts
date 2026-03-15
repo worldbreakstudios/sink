@@ -5,6 +5,8 @@ export default defineTable('fields', {
   field_type_id: v.id('fieldTypes', { enforceExists: true }),
   name: v.string(),
   body: v.string(),
-}).withCreatedAt(true)
-  .index('by_object_id', ['object_id'])
-  .uniqueIndex('by_object_id_field_type', ['object_id', 'field_type_id'])
+})
+  .withActorId(true, { pk: true })
+  .withCreatedAt(true)
+  .index('by_object_id', ['_actor', 'object_id'])
+  .uniqueIndex('by_object_id_field_type', ['_actor', 'object_id', 'field_type_id'])

@@ -36,9 +36,11 @@ export default defineTable('demos', {
   }), { archived: false, pinned: true }),
   optional_notes: v.nullable(v.array(v.string())),
   optional_feature_toggles: v.nullable(v.record(v.string(), v.boolean())),
-}).withCreatedAt(true)
+})
+  .withActorId(true)
+  .withCreatedAt(true)
   .withUpdatedAt(true)
   .withArchivedAt(true)
-  .index('by_label', ['label'])
-  .index('by_field_type_id', ['field_type_id'])
-  .index('by_settings_layout_mode', ['settings.layout.mode'])
+  .index('by_label', ['_actor', 'label'])
+  .index('by_field_type_id', ['_actor', 'field_type_id'])
+  .index('by_settings_layout_mode', ['_actor', 'settings.layout.mode'])

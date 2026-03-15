@@ -1,3 +1,8 @@
+import type { TableName } from '@/data/generated/schema.gen'
+import {
+  formatSqliteDemoKey,
+  getSqliteDemoRowKey,
+} from '@/lib/sqlite-demo-collections'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -46,7 +51,10 @@ export function isStructuredColumnType(columnType: string): boolean {
   )
 }
 
-export function formatReferenceOptionLabel(row: SqliteDemoRow): string {
+export function formatReferenceOptionLabel(
+  tableName: TableName,
+  row: SqliteDemoRow,
+): string {
   const record = row as unknown as Record<string, unknown>
   const title =
     typeof record.title === 'string'
@@ -54,10 +62,11 @@ export function formatReferenceOptionLabel(row: SqliteDemoRow): string {
       : typeof record.name === 'string'
         ? record.name
         : null
+  const keyLabel = formatSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row))
 
   if (title) {
-    return `${row._id} - ${title}`
+    return `${keyLabel} - ${title}`
   }
 
-  return row._id
+  return keyLabel
 }

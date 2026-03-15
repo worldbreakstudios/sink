@@ -1,4 +1,5 @@
 import type { SqliteTableColumn } from '@sink/lib'
+import type { TableName } from '@/data/generated/schema.gen'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,6 +17,10 @@ import type {
   SqliteDemoRow,
   SqliteDemoTableName,
   SqliteInsertDraft,
+} from '@/lib/sqlite-demo-collections'
+import {
+  getSqliteDemoRowKey,
+  serializeSqliteDemoKey,
 } from '@/lib/sqlite-demo-collections'
 import {
   formatReferenceOptionLabel,
@@ -54,7 +59,7 @@ export function InsertRowModal({
   }
 
   const editableColumns = columns.filter(
-    (column) => column.pk === 0 && !column.name.startsWith('_'),
+    (column) => column.pk === 0 && (!column.name.startsWith('_') || column.name === '_actor'),
   )
 
   return (
@@ -82,7 +87,14 @@ export function InsertRowModal({
                 column.name,
               )
               const referenceRows = referenceColumn
-                ? (modal.referenceRows[column.name] ?? [])
+                ? (modal.referenceRows[column.name] ?? []).filter((row) => {
+                    if (!referenceColumn.actorScoped) {
+                      return true
+                    }
+
+                    const rowRecord = row as unknown as Record<string, unknown>
+                    return rowRecord._actor === modal.draft._actor
+                  })
                 : []
 
               return (
@@ -99,8 +111,20 @@ export function InsertRowModal({
                         <option value="">No rows available</option>
                       ) : null}
                       {referenceRows.map((row) => (
-                        <option key={row._id} value={row._id}>
-                          {formatReferenceOptionLabel(row)}
+                        <option
+                          key={serializeSqliteDemoKey(
+                            referenceColumn.referencedTable as TableName,
+                            getSqliteDemoRowKey(
+                              referenceColumn.referencedTable as TableName,
+                              row,
+                            ),
+                          )}
+                          value={String(row._id)}
+                        >
+                          {formatReferenceOptionLabel(
+                            referenceColumn.referencedTable as TableName,
+                            row,
+                          )}
                         </option>
                       ))}
                     </select>

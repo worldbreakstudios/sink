@@ -62,6 +62,7 @@ export interface TableIndexDefinition<
 export const RESERVED_SYSTEM_FIELD_NAMES = [
   'id',
   '_id',
+  '_actor',
   '_createdAt',
   '_updatedAt',
   '_archivedAt',
@@ -305,9 +306,15 @@ export const v = {
 } as const
 
 export interface TableDefinitionOptions {
+  withActorId?: boolean
+  actorIdPrimaryKey?: boolean
   withCreatedAt?: boolean
   withUpdatedAt?: boolean
   withArchivedAt?: boolean
+}
+
+export interface TableActorIdOptions {
+  pk?: boolean
 }
 
 export interface TableDefinition<
@@ -336,6 +343,10 @@ export interface TableDefinition<
     name: string,
     options: TableIndexOptions,
   ): TableDefinition<TColumns>
+  withActorId(
+    enabled?: boolean,
+    options?: TableActorIdOptions,
+  ): TableDefinition<TColumns>
   withCreatedAt(enabled?: boolean): TableDefinition<TColumns>
   withUpdatedAt(enabled?: boolean): TableDefinition<TColumns>
   withArchivedAt(enabled?: boolean): TableDefinition<TColumns>
@@ -345,6 +356,10 @@ export function getImplicitSystemFields(
   options: TableDefinitionOptions,
 ): readonly string[] {
   const fields = ['_id']
+
+  if (options.withActorId) {
+    fields.push('_actor')
+  }
 
   if (options.withCreatedAt) {
     fields.push('_createdAt')
@@ -363,6 +378,26 @@ export function getImplicitSystemFields(
 
 export function getEffectiveTableFieldNames(def: TableDefinition): readonly string[] {
   return [...getImplicitSystemFields(def.options), ...Object.keys(def.columns)]
+}
+
+export function tableHasActorId(options: TableDefinitionOptions): boolean {
+  return options.withActorId === true
+}
+
+export function tableUsesActorPrimaryKey(
+  options: TableDefinitionOptions,
+): boolean {
+  return options.withActorId === true && options.actorIdPrimaryKey === true
+}
+
+export function getPrimaryKeyColumns(
+  options: TableDefinitionOptions,
+): readonly string[] {
+  if (tableUsesActorPrimaryKey(options)) {
+    return ['_actor', '_id']
+  }
+
+  return ['_id']
 }
 
 function normalizeIndexDefinition(
@@ -427,6 +462,13 @@ function createTableDefinition<TColumns extends Record<string, ColumnDescriptor<
         options,
         [...indexes, normalizeIndexDefinition(name, fieldsOrOptions, true)],
       )
+    },
+    withActorId(enabled = true, actorOptions = {}) {
+      return createTableDefinition(tableName, columns, {
+        ...options,
+        withActorId: enabled,
+        actorIdPrimaryKey: enabled ? (actorOptions.pk ?? false) : false,
+      }, indexes)
     },
     withCreatedAt(enabled = true) {
       return createTableDefinition(tableName, columns, {

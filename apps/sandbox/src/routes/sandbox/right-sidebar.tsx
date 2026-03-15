@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { SqliteIndexSnapshot, SqliteReferenceColumn, SqliteTableSnapshot } from '@sink/lib'
+import { KEY_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import { CodeBlock } from '@/components/ui/code-block'
 import { getSchemaSource } from '@/lib/schema-sources'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
@@ -175,7 +176,7 @@ export function RightSidebar({
         ) : activeTab === 'schema' ? (
           <SchemaPanel schemaSource={schemaSource} tableName={tableName} />
         ) : (
-          <IndexesPanel indexes={indexes} />
+          <IndexesPanel tableName={tableName} indexes={indexes} />
         )}
       </div>
     </aside>
@@ -235,7 +236,13 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
+function IndexesPanel({
+  tableName,
+  indexes,
+}: {
+  tableName: string
+  indexes: SqliteIndexSnapshot[]
+}) {
   const regularIndexes = indexes.filter((idx) => !idx.name.startsWith('sqlite_'))
 
   // Primary key index (implicit, always exists)
@@ -245,7 +252,7 @@ function IndexesPanel({ indexes }: { indexes: SqliteIndexSnapshot[] }) {
     unique: 1,
     origin: 'pk',
     partial: 0,
-    fields: ['_id'],
+    fields: [...(KEY_COLUMNS[tableName as TableName] ?? ['_id'])],
   }
 
   const allIndexes = [pkIndex, ...regularIndexes]

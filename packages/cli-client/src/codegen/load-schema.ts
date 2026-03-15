@@ -2,7 +2,9 @@ import fs from 'node:fs'
 import {
   RESERVED_INDEX_NAMES,
   RESERVED_SYSTEM_FIELD_NAMES,
+  defineTable,
   getEffectiveTableFieldNames,
+  tableHasActorId,
   type TableDefinition,
 } from '@sink/lib'
 
@@ -28,6 +30,18 @@ export async function loadSchemaFiles(
       throw new Error(`Duplicate table name: "${def.tableName}"`)
     }
 
+    seenNames.add(def.tableName)
+    definitions.push(def)
+  }
+
+  if (!seenNames.has('actors')) {
+    definitions.unshift(defineTable('actors', {}))
+    seenNames.add('actors')
+  }
+
+  const tablesByName = new Map(definitions.map((definition) => [definition.tableName, definition]))
+
+  for (const def of definitions) {
     const primaryKeyColumns = Object.entries(def.columns).filter(
       ([, col]) => col.isPrimaryKey,
     )
@@ -38,9 +52,7 @@ export async function loadSchemaFiles(
     }
 
     validateIndexes(def)
-
-    seenNames.add(def.tableName)
-    definitions.push(def)
+    validateReferences(def, tablesByName)
   }
 
   return definitions
@@ -80,7 +92,7 @@ function validateIndexes(def: TableDefinition): void {
         )
       }
 
-      if (field.startsWith('_')) {
+      if (field.startsWith('_') && field !== '_actor') {
         throw new Error(
           `Table "${def.tableName}" index "${index.name}" cannot index reserved field "${field}".`,
         )
@@ -97,7 +109,8 @@ function validateIndexes(def: TableDefinition): void {
       if (
         RESERVED_SYSTEM_FIELD_NAMES.includes(
           topLevelField as (typeof RESERVED_SYSTEM_FIELD_NAMES)[number],
-        )
+        ) &&
+        topLevelField !== '_actor'
       ) {
         throw new Error(
           `Table "${def.tableName}" index "${index.name}" cannot index reserved field "${field}".`,
@@ -108,5 +121,33 @@ function validateIndexes(def: TableDefinition): void {
     }
 
     seenIndexNames.add(index.name)
+  }
+}
+
+function validateReferences(
+  def: TableDefinition,
+  tablesByName: Map<string, TableDefinition>,
+): void {
+  for (const [columnName, column] of Object.entries(def.columns)) {
+    if (!column.referencedTable) {
+      continue
+    }
+
+    const referencedTable = tablesByName.get(column.referencedTable)
+
+    if (!referencedTable) {
+      throw new Error(
+        `Table "${def.tableName}" column "${columnName}" references unknown table "${column.referencedTable}".`,
+      )
+    }
+
+    if (
+      tableHasActorId(referencedTable.options) &&
+      !tableHasActorId(def.options)
+    ) {
+      throw new Error(
+        `Table "${def.tableName}" column "${columnName}" cannot reference actor-scoped table "${referencedTable.tableName}" without enabling .withActorId(true).`,
+      )
+    }
   }
 }
