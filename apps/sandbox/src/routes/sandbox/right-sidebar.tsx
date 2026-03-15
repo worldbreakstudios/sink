@@ -188,7 +188,11 @@ function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableN
       <p className="text-xs text-muted-foreground">
         Generated schema for <code className="rounded bg-muted px-1">{tableName}</code>
       </p>
-      <CodeBlock code={schemaSource.trim()} language="typescript" />
+      <CodeBlock
+        code={schemaSource.trim()}
+        language="typescript"
+        formatLanguage="typescript"
+      />
     </div>
   )
 }

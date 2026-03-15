@@ -6,42 +6,95 @@ interface CodeBlockProps {
   code: string
   language?: string
   className?: string
+  formatLanguage?: 'typescript'
 }
 
-export function CodeBlock({ code, language = 'typescript', className }: CodeBlockProps) {
+async function formatCode(code: string, formatLanguage?: 'typescript'): Promise<string> {
+  if (formatLanguage !== 'typescript') {
+    return code
+  }
+
+  try {
+    const [{ format }, estreePlugin, typescriptPlugin] = await Promise.all([
+      import('prettier/standalone'),
+      import('prettier/plugins/estree'),
+      import('prettier/plugins/typescript'),
+    ])
+
+    const estree = 'default' in estreePlugin ? estreePlugin.default : estreePlugin
+    const typescript =
+      'default' in typescriptPlugin ? typescriptPlugin.default : typescriptPlugin
+
+    return (
+      await format(code, {
+        parser: 'typescript',
+        plugins: [estree, typescript],
+        printWidth: 72,
+        tabWidth: 2,
+        semi: false,
+        singleQuote: true,
+        trailingComma: 'all',
+      })
+    ).trimEnd()
+  } catch (error) {
+    console.error('Failed to format code block:', error)
+    return code
+  }
+}
+
+export function CodeBlock({
+  code,
+  language = 'typescript',
+  className,
+  formatLanguage,
+}: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null)
+  const [displayCode, setDisplayCode] = useState(code)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     let cancelled = false
 
-    codeToHtml(code, {
-      lang: language,
-      themes: {
-        light: 'vitesse-light',
-        dark: 'vitesse-dark',
-      },
-      defaultColor: false,
-    }).then((result) => {
+    setHtml(null)
+
+    async function renderHtml() {
+      const nextCode = await formatCode(code, formatLanguage)
+      if (cancelled) {
+        return
+      }
+
+      setDisplayCode(nextCode)
+
+      const result = await codeToHtml(nextCode, {
+        lang: language,
+        themes: {
+          light: 'vitesse-light',
+          dark: 'vitesse-dark',
+        },
+        defaultColor: false,
+      })
+
       if (!cancelled) {
         setHtml(result)
       }
-    })
+    }
+
+    void renderHtml()
 
     return () => {
       cancelled = true
     }
-  }, [code, language])
+  }, [code, language, formatLanguage])
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(displayCode)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       console.error('Failed to copy:', err)
     }
-  }, [code])
+  }, [displayCode])
 
   return (
     <div className={cn('group relative', className)}>
@@ -103,7 +156,7 @@ export function CodeBlock({ code, language = 'typescript', className }: CodeBloc
         />
       ) : (
         <pre className="overflow-x-auto rounded-md bg-[#fafafa] p-3 text-xs leading-relaxed text-neutral-800 dark:bg-[#121212] dark:text-neutral-200">
-          <code>{code}</code>
+          <code>{displayCode}</code>
         </pre>
       )}
     </div>
