@@ -54,7 +54,7 @@ const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 const HISTORY_STORAGE_KEY = 'sandbox-query-history'
 const MAX_HISTORY_ITEMS = 50
 
-type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'isKnown' | 'isUnknown'
+type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'isKnown' | 'isUnknown'
 type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
 
 interface Constraint {
@@ -81,6 +81,7 @@ const OPERATORS: Array<{ value: Operator; label: string }> = [
   { value: 'gte', label: '>=' },
   { value: 'lt', label: '<' },
   { value: 'lte', label: '<=' },
+  { value: 'like', label: 'LIKE' },
   { value: 'isKnown', label: 'IS KNOWN' },
   { value: 'isUnknown', label: 'IS UNKNOWN' },
 ]
@@ -93,6 +94,25 @@ function isConstraintActive(constraint: Constraint): boolean {
   return operatorNeedsValue(constraint.operator)
     ? constraint.value.trim() !== ''
     : true
+}
+
+function isTextBackedSqlType(columnType: string | undefined): boolean {
+  if (!columnType) {
+    return false
+  }
+
+  const sqlType = columnType.toUpperCase()
+
+  return (
+    (sqlType.includes('TEXT') ||
+      sqlType.includes('CHAR') ||
+      sqlType.includes('CLOB')) &&
+    !sqlType.includes('INT') &&
+    !sqlType.includes('REAL') &&
+    !sqlType.includes('FLOA') &&
+    !sqlType.includes('DOUB') &&
+    !sqlType.includes('BOOL')
+  )
 }
 
 function loadHistory(): HistoryEntry[] {
@@ -300,6 +320,22 @@ export function DataTable({
     }
     return map
   }, [columns])
+  const getOperatorOptionsForField = useCallback((field: string) => {
+    const rootField = field.split('.')[0] ?? field
+    const rootColumnType = columnInfoMap[rootField]?.type
+    const normalizedRootColumnType = rootColumnType?.toUpperCase() ?? ''
+    const supportsLike =
+      isTextBackedSqlType(rootColumnType) &&
+      (field.includes('.') || !normalizedRootColumnType.includes('JSON_'))
+
+    return OPERATORS.filter((operator) => {
+      if (operator.value !== 'like') {
+        return true
+      }
+
+      return supportsLike
+    })
+  }, [columnInfoMap])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
     rowKey: string
@@ -635,9 +671,22 @@ export function DataTable({
 
   const updateConstraint = useCallback((index: number, updates: Partial<Constraint>) => {
     setConstraints((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, ...updates } : c)),
+      prev.map((constraint, i) => {
+        if (i !== index) {
+          return constraint
+        }
+
+        const nextConstraint = { ...constraint, ...updates }
+        const nextOperatorOptions = getOperatorOptionsForField(nextConstraint.field)
+
+        if (!nextOperatorOptions.some((operator) => operator.value === nextConstraint.operator)) {
+          nextConstraint.operator = 'eq'
+        }
+
+        return nextConstraint
+      }),
     )
-  }, [])
+  }, [getOperatorOptionsForField])
 
   const removeConstraint = useCallback((index: number) => {
     setConstraints((prev) => prev.filter((_, i) => i !== index))
@@ -877,55 +926,59 @@ export function DataTable({
                         + Add filter
                       </Button>
                     </div>
-                    {constraints.map((constraint, i) => (
-                      <div key={i} className="ml-[72px] flex items-center gap-2">
-                        <Select value={constraint.field} onValueChange={(value) => updateConstraint(i, { field: value })}>
-                          <SelectTrigger size="sm" className="h-7 w-28 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {indexFields.map((field) => (
-                              <SelectItem key={field} value={field}>{field}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
-                          <SelectTrigger size="sm" className="h-7 w-32 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {OPERATORS.map((operator) => (
-                              <SelectItem key={operator.value} value={operator.value}>
-                                {operator.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {operatorNeedsValue(constraint.operator) ? (
-                          <Input
-                            value={constraint.value}
-                            onChange={(e) => updateConstraint(i, { value: e.target.value })}
-                            placeholder="value"
-                            className="h-7 flex-1 text-xs"
-                          />
-                        ) : (
-                          <div className="flex h-7 flex-1 items-center rounded-md border border-dashed border-input px-3 text-xs text-muted-foreground">
-                            No value needed
-                          </div>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeConstraint(i)}
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 6 6 18" />
-                            <path d="m6 6 12 12" />
-                          </svg>
-                        </Button>
-                      </div>
-                    ))}
+                    {constraints.map((constraint, i) => {
+                      const operatorOptions = getOperatorOptionsForField(constraint.field)
+
+                      return (
+                        <div key={i} className="ml-[72px] flex items-center gap-2">
+                          <Select value={constraint.field} onValueChange={(value) => updateConstraint(i, { field: value })}>
+                            <SelectTrigger size="sm" className="h-7 w-28 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {indexFields.map((field) => (
+                                <SelectItem key={field} value={field}>{field}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
+                            <SelectTrigger size="sm" className="h-7 w-32 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {operatorOptions.map((operator) => (
+                                <SelectItem key={operator.value} value={operator.value}>
+                                  {operator.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {operatorNeedsValue(constraint.operator) ? (
+                            <Input
+                              value={constraint.value}
+                              onChange={(e) => updateConstraint(i, { value: e.target.value })}
+                              placeholder="value"
+                              className="h-7 flex-1 text-xs"
+                            />
+                          ) : (
+                            <div className="flex h-7 flex-1 items-center rounded-md border border-dashed border-input px-3 text-xs text-muted-foreground">
+                              No value needed
+                            </div>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeConstraint(i)}
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </svg>
+                          </Button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 

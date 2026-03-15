@@ -211,6 +211,10 @@ export interface SqliteIndexRangeBuilder<
     field: TField,
     value: IndexFieldValue<TRow, TField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, true, false>;
+  like<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
   isKnown<TField extends Head<TFields>>(
     field: TField,
   ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
@@ -241,6 +245,10 @@ export interface SqliteBoundIndexRangeBuilder<
     field: TNextField,
     value: IndexFieldValue<TRow, TNextField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>;
+  like<TNextField extends TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
   isKnown<TNextField extends TField>(
     field: TNextField,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
@@ -698,6 +706,7 @@ function createSqliteQuery<
   initialIndexFields: readonly string[] = ["_id"],
   initialRange: SqliteQueryRangeState = {
     equals: [],
+    likes: [],
     nullChecks: [],
     lowerBound: null,
     upperBound: null,
@@ -1207,10 +1216,12 @@ function currentTimestamp(): bigint {
 }
 
 type SqliteComparisonOperator = "=" | ">" | ">=" | "<" | "<=";
+type SqliteMatchOperator = SqliteComparisonOperator | "LIKE";
 type SqliteNullCheckOperator = "IS NULL" | "IS NOT NULL";
 
 interface SqliteQueryRangeState {
   equals: Array<{ field: string; value: unknown }>;
+  likes: Array<{ field: string; value: unknown }>;
   nullChecks: Array<{ field: string; operator: SqliteNullCheckOperator }>;
   lowerBound: { field: string; value: unknown; operator: ">" | ">=" } | null;
   upperBound: { field: string; value: unknown; operator: "<" | "<=" } | null;
@@ -1223,6 +1234,7 @@ class RuntimeIndexRangeBuilder<TRow extends object>
 {
   private state: SqliteQueryRangeState = {
     equals: [],
+    likes: [],
     nullChecks: [],
     lowerBound: null,
     upperBound: null,
@@ -1253,6 +1265,11 @@ class RuntimeIndexRangeBuilder<TRow extends object>
     return this as unknown as RuntimeIndexRangeBuilder<TRow>;
   }
 
+  like(field: string, value: unknown) {
+    this.state.likes.push({ field, value });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
   isKnown(field: string) {
     this.state.nullChecks.push({ field, operator: "IS NOT NULL" });
     return this as unknown as RuntimeIndexRangeBuilder<TRow>;
@@ -1266,6 +1283,7 @@ class RuntimeIndexRangeBuilder<TRow extends object>
   getState(): SqliteQueryRangeState {
     return {
       equals: [...this.state.equals],
+      likes: [...this.state.likes],
       nullChecks: [...this.state.nullChecks],
       lowerBound: this.state.lowerBound,
       upperBound: this.state.upperBound,
@@ -1318,6 +1336,17 @@ function buildIndexedSelectSql(
       equality.field,
       "=",
       equality.value,
+      structuredColumns,
+    );
+  }
+
+  for (const like of range.likes) {
+    appendWhereClause(
+      whereClauses,
+      bind,
+      like.field,
+      "LIKE",
+      like.value,
       structuredColumns,
     );
   }
@@ -1376,7 +1405,7 @@ function appendWhereClause(
   whereClauses: string[],
   bind: unknown[],
   field: string,
-  operator: SqliteComparisonOperator,
+  operator: SqliteMatchOperator,
   value: unknown,
   structuredColumns: StructuredColumns,
 ): void {
