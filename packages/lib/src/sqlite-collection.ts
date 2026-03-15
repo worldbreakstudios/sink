@@ -79,23 +79,15 @@ export interface SqliteMutationChange {
 }
 
 export interface SqliteMutationRowDiff {
-  rowIndex: number;
+  key: string | number | null;
   changeType: "inserted" | "updated" | "deleted" | "unchanged";
   changes: Record<string, SqliteMutationChange>;
 }
 
 export interface SqliteMutationEvent {
-  channel: string;
   tableName: string;
-  collectionId: string;
   mutationType: PendingMutation<Record<string, unknown>>["type"];
   keyColumn: string;
-  key: string | number;
-  snapshotSql: string;
-  whereClause: string;
-  whereBind: Array<string | number>;
-  beforeRows: Array<Record<string, unknown>>;
-  afterRows: Array<Record<string, unknown>>;
   rowDiffs: SqliteMutationRowDiff[];
   publishedAt: number;
 }
@@ -703,7 +695,6 @@ async function applyMutation<TRow extends object>(
   return createMutationEvent(
     options,
     mutation,
-    snapshotQuery,
     beforeRows,
     afterRows,
   );
@@ -711,7 +702,6 @@ async function applyMutation<TRow extends object>(
 
 interface MutationSnapshotQuery {
   sql: string;
-  whereClause: string;
   bind: Array<string | number>;
 }
 
@@ -725,7 +715,6 @@ function buildMutationSnapshotQuery<TRow extends object>(
 
   return {
     sql: `SELECT * FROM "${escapedTableName}" ${whereClause} ORDER BY "${escapedKeyColumn}" ASC;`,
-    whereClause,
     bind: [key],
   };
 }
@@ -746,24 +735,20 @@ async function queryMutationRows(
 function createMutationEvent<TRow extends object>(
   options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
-  snapshotQuery: MutationSnapshotQuery,
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
-) : SqliteMutationEvent {
-  const rowDiffs = buildMutationRowDiffs(beforeRows, afterRows);
-
-  return {
-    channel: getSqliteMutationChannel(options.tableName),
-    tableName: options.tableName,
-    collectionId: options.id,
-    mutationType: mutation.type,
-    keyColumn: options.keyColumn,
-    key: mutation.key,
-    snapshotSql: snapshotQuery.sql,
-    whereClause: snapshotQuery.whereClause,
-    whereBind: snapshotQuery.bind,
+): SqliteMutationEvent {
+  const rowDiffs = buildMutationRowDiffs(
     beforeRows,
     afterRows,
+    options.keyColumn,
+    mutation.key,
+  );
+
+  return {
+    tableName: options.tableName,
+    mutationType: mutation.type,
+    keyColumn: options.keyColumn,
     rowDiffs,
     publishedAt: Date.now(),
   };
@@ -771,12 +756,14 @@ function createMutationEvent<TRow extends object>(
 
 function logMutationDiff(event: SqliteMutationEvent): void {
   console.log(event);
-  sqliteMutationEventBus.publish(event.channel, event);
+  sqliteMutationEventBus.publish(event.tableName, event);
 }
 
 function buildMutationRowDiffs(
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
+  keyColumn: string,
+  fallbackKey: string | number,
 ): SqliteMutationRowDiff[] {
   const rowCount = Math.max(beforeRows.length, afterRows.length);
   const diffs: SqliteMutationRowDiff[] = [];
@@ -787,7 +774,7 @@ function buildMutationRowDiffs(
     const changes = diffRowValues(beforeRow, afterRow);
 
     diffs.push({
-      rowIndex,
+      key: resolveMutationRowKey(beforeRow, afterRow, keyColumn, fallbackKey),
       changeType:
         beforeRow === undefined
           ? "inserted"
@@ -801,6 +788,21 @@ function buildMutationRowDiffs(
   }
 
   return diffs;
+}
+
+function resolveMutationRowKey(
+  beforeRow: Record<string, unknown> | undefined,
+  afterRow: Record<string, unknown> | undefined,
+  keyColumn: string,
+  fallbackKey: string | number,
+): string | number | null {
+  const rowKey = afterRow?.[keyColumn] ?? beforeRow?.[keyColumn];
+
+  if (typeof rowKey === "string" || typeof rowKey === "number") {
+    return rowKey;
+  }
+
+  return fallbackKey ?? null;
 }
 
 function diffRowValues(
