@@ -54,7 +54,7 @@ const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 const HISTORY_STORAGE_KEY = 'sandbox-query-history'
 const MAX_HISTORY_ITEMS = 50
 
-type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
+type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'isKnown' | 'isUnknown'
 type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
 
 interface Constraint {
@@ -73,6 +73,26 @@ interface HistoryEntry {
   takeCount: string
   generatedCode: string
   timestamp: number
+}
+
+const OPERATORS: Array<{ value: Operator; label: string }> = [
+  { value: 'eq', label: '=' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '>=' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '<=' },
+  { value: 'isKnown', label: 'IS KNOWN' },
+  { value: 'isUnknown', label: 'IS UNKNOWN' },
+]
+
+function operatorNeedsValue(operator: Operator): boolean {
+  return operator !== 'isKnown' && operator !== 'isUnknown'
+}
+
+function isConstraintActive(constraint: Constraint): boolean {
+  return operatorNeedsValue(constraint.operator)
+    ? constraint.value.trim() !== ''
+    : true
 }
 
 function loadHistory(): HistoryEntry[] {
@@ -133,6 +153,14 @@ function formatValueForCode(value: string): string {
   }
 
   return `'${String(parsed).replace(/'/g, "\\'")}'`
+}
+
+function formatConstraintForCode(constraint: Constraint): string {
+  if (!operatorNeedsValue(constraint.operator)) {
+    return `.${constraint.operator}('${constraint.field}')`
+  }
+
+  return `.${constraint.operator}('${constraint.field}', ${formatValueForCode(constraint.value)})`
 }
 
 export function parseValue(value: string): unknown {
@@ -427,7 +455,7 @@ export function DataTable({
     if (constraints.length > 0) {
       code += `, (q) => q`
       for (const c of constraints) {
-        code += `\n    .${c.operator}('${c.field}', ${formatValueForCode(c.value)})`
+        code += `\n    ${formatConstraintForCode(c)}`
       }
       code += `\n  )`
     } else {
@@ -663,7 +691,7 @@ export function DataTable({
   const activeFilterCount = useMemo(() => {
     let count = 0
     if (selectedIndex) count++
-    count += constraints.filter((c) => c.value.trim() !== '').length
+    count += constraints.filter(isConstraintActive).length
     return count
   }, [selectedIndex, constraints])
 
@@ -862,23 +890,29 @@ export function DataTable({
                           </SelectContent>
                         </Select>
                         <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
-                          <SelectTrigger size="sm" className="h-7 w-16 text-xs">
+                          <SelectTrigger size="sm" className="h-7 w-32 text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="eq">=</SelectItem>
-                            <SelectItem value="gt">&gt;</SelectItem>
-                            <SelectItem value="gte">&gt;=</SelectItem>
-                            <SelectItem value="lt">&lt;</SelectItem>
-                            <SelectItem value="lte">&lt;=</SelectItem>
+                            {OPERATORS.map((operator) => (
+                              <SelectItem key={operator.value} value={operator.value}>
+                                {operator.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
-                        <Input
-                          value={constraint.value}
-                          onChange={(e) => updateConstraint(i, { value: e.target.value })}
-                          placeholder="value"
-                          className="h-7 flex-1 text-xs"
-                        />
+                        {operatorNeedsValue(constraint.operator) ? (
+                          <Input
+                            value={constraint.value}
+                            onChange={(e) => updateConstraint(i, { value: e.target.value })}
+                            placeholder="value"
+                            className="h-7 flex-1 text-xs"
+                          />
+                        ) : (
+                          <div className="flex h-7 flex-1 items-center rounded-md border border-dashed border-input px-3 text-xs text-muted-foreground">
+                            No value needed
+                          </div>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"

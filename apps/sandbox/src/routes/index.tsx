@@ -373,6 +373,11 @@ function App() {
       let q = collection.query().withIndex(query.indexName, (builder: any) => {
         let b = builder
         for (const c of query.constraints) {
+          if (c.operator === 'isKnown' || c.operator === 'isUnknown') {
+            b = b[c.operator](c.field)
+            continue
+          }
+
           const value = parseValue(c.value)
           b = b[c.operator](c.field, value)
         }

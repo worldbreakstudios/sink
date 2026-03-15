@@ -211,6 +211,12 @@ export interface SqliteIndexRangeBuilder<
     field: TField,
     value: IndexFieldValue<TRow, TField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, true, false>;
+  isKnown<TField extends Head<TFields>>(
+    field: TField,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
+  isUnknown<TField extends Head<TFields>>(
+    field: TField,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
 }
 
 export interface SqliteBoundIndexRangeBuilder<
@@ -235,6 +241,12 @@ export interface SqliteBoundIndexRangeBuilder<
     field: TNextField,
     value: IndexFieldValue<TRow, TNextField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>;
+  isKnown<TNextField extends TField>(
+    field: TNextField,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
+  isUnknown<TNextField extends TField>(
+    field: TNextField,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
 }
 
 /**
@@ -686,6 +698,7 @@ function createSqliteQuery<
   initialIndexFields: readonly string[] = ["_id"],
   initialRange: SqliteQueryRangeState = {
     equals: [],
+    nullChecks: [],
     lowerBound: null,
     upperBound: null,
   },
@@ -1194,9 +1207,11 @@ function currentTimestamp(): bigint {
 }
 
 type SqliteComparisonOperator = "=" | ">" | ">=" | "<" | "<=";
+type SqliteNullCheckOperator = "IS NULL" | "IS NOT NULL";
 
 interface SqliteQueryRangeState {
   equals: Array<{ field: string; value: unknown }>;
+  nullChecks: Array<{ field: string; operator: SqliteNullCheckOperator }>;
   lowerBound: { field: string; value: unknown; operator: ">" | ">=" } | null;
   upperBound: { field: string; value: unknown; operator: "<" | "<=" } | null;
 }
@@ -1208,6 +1223,7 @@ class RuntimeIndexRangeBuilder<TRow extends object>
 {
   private state: SqliteQueryRangeState = {
     equals: [],
+    nullChecks: [],
     lowerBound: null,
     upperBound: null,
   };
@@ -1237,9 +1253,20 @@ class RuntimeIndexRangeBuilder<TRow extends object>
     return this as unknown as RuntimeIndexRangeBuilder<TRow>;
   }
 
+  isKnown(field: string) {
+    this.state.nullChecks.push({ field, operator: "IS NOT NULL" });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
+  isUnknown(field: string) {
+    this.state.nullChecks.push({ field, operator: "IS NULL" });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
   getState(): SqliteQueryRangeState {
     return {
       equals: [...this.state.equals],
+      nullChecks: [...this.state.nullChecks],
       lowerBound: this.state.lowerBound,
       upperBound: this.state.upperBound,
     };
@@ -1295,6 +1322,14 @@ function buildIndexedSelectSql(
     );
   }
 
+  for (const nullCheck of range.nullChecks) {
+    appendNullCheckClause(
+      whereClauses,
+      nullCheck.field,
+      nullCheck.operator,
+    );
+  }
+
   if (range.lowerBound) {
     appendWhereClause(
       whereClauses,
@@ -1347,6 +1382,14 @@ function appendWhereClause(
 ): void {
   whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator} ?`);
   bind.push(serializeQueryValue(field, value, structuredColumns));
+}
+
+function appendNullCheckClause(
+  whereClauses: string[],
+  field: string,
+  operator: SqliteNullCheckOperator,
+): void {
+  whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator}`);
 }
 
 function serializeQueryValue(
