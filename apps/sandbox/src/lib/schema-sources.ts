@@ -1,10 +1,20 @@
 import type { SqliteTableSnapshot } from '@sink/lib'
-import { REFERENCE_COLUMNS, INDEXES, type TableName } from '@/data/generated/schema.gen'
+import {
+  REFERENCE_COLUMNS,
+  INDEXES,
+  SCHEMA_SOURCES,
+  type TableName,
+} from '@/data/generated/schema.gen'
 
 /**
  * Generate defineTable schema source code from table metadata
  */
 export function generateSchemaSource(table: SqliteTableSnapshot): string {
+  const generatedSource = (SCHEMA_SOURCES as Partial<Record<string, string>>)[table.name]
+  if (generatedSource) {
+    return generatedSource
+  }
+
   const tableName = table.name as TableName
   const referenceColumns = REFERENCE_COLUMNS[tableName] ?? {}
   const tableIndexes = INDEXES[tableName] ?? {}
@@ -44,7 +54,7 @@ export function generateSchemaSource(table: SqliteTableSnapshot): string {
 
     // Wrap with optional if nullable
     if (col.notnull === 0 && col.pk === 0) {
-      validator = `v.optional(${validator})`
+      validator = `v.nullable(${validator})`
     }
 
     return `    ${col.name}: ${validator},`
@@ -92,6 +102,11 @@ export function getSchemaSource(
   tableName: string,
   tables: SqliteTableSnapshot[],
 ): string {
+  const generatedSource = (SCHEMA_SOURCES as Partial<Record<string, string>>)[tableName]
+  if (generatedSource) {
+    return generatedSource
+  }
+
   const table = tables.find((t) => t.name === tableName)
   if (!table) {
     return `// No schema found for table "${tableName}"`

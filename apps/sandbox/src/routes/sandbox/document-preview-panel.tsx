@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { SqliteReferenceColumn } from '@sink/lib'
+import { SCHEMA_VALIDATORS } from '@/data/generated/schema.gen'
 import { cn } from '@/lib/utils'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { formatCellValue, getRowValue } from './utils'
@@ -11,6 +12,7 @@ import {
 } from '@/components/ui/tooltip'
 
 interface DocumentPreviewPanelProps {
+  tableName: string
   rows: SqliteDemoRow[]
   columns: { name: string; type: string; pk?: number; notnull?: number }[]
   referenceColumns: Record<string, SqliteReferenceColumn>
@@ -55,19 +57,28 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function getColumnValidator(
+  tableName: string,
   columnName: string,
   column: { name: string; type: string; notnull?: number; pk?: number },
   referenceColumns: Record<string, SqliteReferenceColumn>,
 ): string {
+  const generatedValidator = (
+    SCHEMA_VALIDATORS as Partial<Record<string, Record<string, string>>>
+  )[tableName]?.[columnName]
+
+  if (generatedValidator) {
+    return generatedValidator
+  }
+
   if (columnName === '_id') return 'v.id()'
   if (columnName === '_createdAt') return 'v.number()'
-  if (columnName === '_updatedAt') return 'v.optional(v.number())'
-  if (columnName === '_archivedAt') return 'v.optional(v.number())'
+  if (columnName === '_updatedAt') return 'v.number()'
+  if (columnName === '_archivedAt') return 'v.nullable(v.number())'
 
   const ref = referenceColumns[columnName]
   if (ref) {
     return ref.enforceExists
-      ? `v.id('${ref.referencedTable}')`
+      ? `v.id('${ref.referencedTable}', { enforceExists: true })`
       : `v.id('${ref.referencedTable}')`
   }
 
@@ -84,7 +95,7 @@ function getColumnValidator(
   }
 
   if (column.notnull === 0 && column.pk === 0) {
-    validator = `v.optional(${validator})`
+    validator = `v.nullable(${validator})`
   }
 
   return validator
@@ -144,7 +155,12 @@ function MultiValueCopyButton({
   )
 }
 
-export function DocumentPreviewPanel({ rows, columns, referenceColumns }: DocumentPreviewPanelProps) {
+export function DocumentPreviewPanel({
+  tableName,
+  rows,
+  columns,
+  referenceColumns,
+}: DocumentPreviewPanelProps) {
   // Single document view
   if (rows.length === 1) {
     const row = rows[0]!
@@ -156,7 +172,7 @@ export function DocumentPreviewPanel({ rows, columns, referenceColumns }: Docume
         {columns.map((column) => {
           const value = getRowValue(row, column.name)
           const formattedValue = formatCellValue(value)
-          const validator = getColumnValidator(column.name, column, referenceColumns)
+          const validator = getColumnValidator(tableName, column.name, column, referenceColumns)
 
           return (
             <div key={column.name} className="rounded-md border bg-card p-3">
@@ -184,7 +200,7 @@ export function DocumentPreviewPanel({ rows, columns, referenceColumns }: Docume
         <span className="font-medium">{rows.length} documents</span> selected
       </p>
       {columns.map((column) => {
-        const validator = getColumnValidator(column.name, column, referenceColumns)
+        const validator = getColumnValidator(tableName, column.name, column, referenceColumns)
 
         return (
           <div key={column.name} className="rounded-md border bg-card p-3">

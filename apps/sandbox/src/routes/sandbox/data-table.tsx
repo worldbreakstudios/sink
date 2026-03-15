@@ -27,7 +27,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { SchemaCollections, TableName } from '@/data/generated/schema.gen'
-import { INDEXES, REFERENCE_COLUMNS } from '@/data/generated/schema.gen'
+import {
+  INDEXES,
+  REFERENCE_COLUMNS,
+  SCHEMA_VALIDATORS,
+} from '@/data/generated/schema.gen'
 import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
@@ -166,15 +170,24 @@ function formatTimestamp(timestamp: number): string {
 }
 
 function getColumnValidator(
+  tableName: string,
   columnName: string,
   column: { name: string; type: string; notnull?: number; pk?: number },
   referenceColumns: Record<string, SqliteReferenceColumn>,
 ): string {
+  const generatedValidator = (
+    SCHEMA_VALIDATORS as Partial<Record<string, Record<string, string>>>
+  )[tableName]?.[columnName]
+
+  if (generatedValidator) {
+    return generatedValidator
+  }
+
   // System columns
   if (columnName === '_id') return 'v.id()'
   if (columnName === '_createdAt') return 'v.number()'
-  if (columnName === '_updatedAt') return 'v.optional(v.number())'
-  if (columnName === '_archivedAt') return 'v.optional(v.number())'
+  if (columnName === '_updatedAt') return 'v.number()'
+  if (columnName === '_archivedAt') return 'v.nullable(v.number())'
 
   const ref = referenceColumns[columnName]
   if (ref) {
@@ -196,7 +209,7 @@ function getColumnValidator(
   }
 
   if (column.notnull === 0 && column.pk === 0) {
-    validator = `v.optional(${validator})`
+    validator = `v.nullable(${validator})`
   }
 
   return validator
@@ -1002,7 +1015,7 @@ export function DataTable({
                         </TooltipTrigger>
                         <TooltipContent side="bottom" className="font-mono text-xs">
                           {columnInfoMap[columnName]
-                            ? getColumnValidator(columnName, columnInfoMap[columnName], referenceColumns)
+                            ? getColumnValidator(tableName, columnName, columnInfoMap[columnName], referenceColumns)
                             : 'unknown'}
                         </TooltipContent>
                       </Tooltip>

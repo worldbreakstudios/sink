@@ -111,7 +111,7 @@ function generateCode(
     }
 
     if (col.optional) {
-      validator = `v.optional(${validator})`
+      validator = `v.nullable(${validator})`
     }
 
     return `    ${col.name}: ${validator},`

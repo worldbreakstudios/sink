@@ -9,7 +9,7 @@ export type ColumnValidatorDescriptor =
   | { kind: 'number' }
   | { kind: 'float' }
   | { kind: 'boolean' }
-  | { kind: 'id'; referencedTable: string }
+  | { kind: 'id'; referencedTable: string; enforceExists: boolean }
   | { kind: 'array'; element: ColumnValidatorDescriptor }
   | { kind: 'object'; fields: Record<string, ColumnValidatorDescriptor> }
   | {
@@ -17,6 +17,8 @@ export type ColumnValidatorDescriptor =
     keys: ColumnValidatorDescriptor
     values: ColumnValidatorDescriptor
   }
+  | { kind: 'nullable'; inner: ColumnValidatorDescriptor }
+  | { kind: 'default'; inner: ColumnValidatorDescriptor; value: unknown }
 
 export interface ColumnDescriptor<
   TValue = unknown,
@@ -108,6 +110,10 @@ function renderValidatorTsType(validator: ColumnValidatorDescriptor): string {
     }
     case 'record':
       return `Record<string, ${renderValidatorTsType(validator.values)}>`
+    case 'nullable':
+      return `${renderValidatorTsType(validator.inner)} | null`
+    case 'default':
+      return renderValidatorTsType(validator.inner)
   }
 }
 
@@ -187,7 +193,11 @@ export const v = {
       referencedTable: tableName,
       enforceExists: options.enforceExists ?? false,
       jsonKind: null,
-      validator: { kind: 'id', referencedTable: tableName },
+      validator: {
+        kind: 'id',
+        referencedTable: tableName,
+        enforceExists: options.enforceExists ?? false,
+      },
     })
   },
 
@@ -260,14 +270,16 @@ export const v = {
       .replace(' PRIMARY KEY', '')
     return createDescriptor({
       sqliteType,
-      tsType: inner.isNullable ? inner.tsType : `${inner.tsType} | null`,
       isNullable: true,
       isPrimaryKey: false,
       defaultValue: undefined,
       referencedTable: inner.referencedTable,
       enforceExists: inner.enforceExists,
       jsonKind: inner.jsonKind,
-      validator: inner.validator,
+      validator: {
+        kind: 'nullable',
+        inner: inner.validator,
+      },
     })
   },
 
@@ -283,7 +295,11 @@ export const v = {
       referencedTable: inner.referencedTable,
       enforceExists: inner.enforceExists,
       jsonKind: inner.jsonKind,
-      validator: inner.validator,
+      validator: {
+        kind: 'default',
+        inner: inner.validator,
+        value,
+      },
     })
   },
 } as const

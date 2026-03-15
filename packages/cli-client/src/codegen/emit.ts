@@ -1,4 +1,8 @@
-import type { ColumnDescriptor, TableDefinition } from '@sink/lib'
+import type {
+  ColumnDescriptor,
+  ColumnValidatorDescriptor,
+  TableDefinition,
+} from '@sink/lib'
 
 export function emit(definitions: TableDefinition[]): string {
   const lines: string[] = []
@@ -8,7 +12,7 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push("import type { TransactionConfig } from '@tanstack/db'")
   lines.push("import { createTransaction } from '@tanstack/db'")
   lines.push(
-    "import type { AsyncSqliteDatabase, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
+    "import type { AsyncSqliteDatabase, ColumnValidatorDescriptor, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
   )
   lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
@@ -155,6 +159,54 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('  },')
   }
   lines.push('} as const satisfies IndexesByTable')
+  lines.push('')
+  lines.push(
+    'export type SchemaValidatorDescriptorsByTable = Record<TableName, Partial<Record<string, ColumnValidatorDescriptor>>>',
+  )
+  lines.push('')
+  lines.push(
+    'export const SCHEMA_VALIDATOR_DESCRIPTORS: SchemaValidatorDescriptorsByTable = {',
+  )
+  for (const def of definitions) {
+    lines.push(`  ${JSON.stringify(def.tableName)}: {`)
+    for (const [columnName, col] of Object.entries(def.columns)) {
+      lines.push(
+        `    ${JSON.stringify(columnName)}: ${renderValidatorDescriptorLiteral(col.validator)},`,
+      )
+    }
+    lines.push('  },')
+  }
+  lines.push('}')
+  lines.push('')
+  lines.push('export type SchemaValidatorsByTable = Record<TableName, Record<string, string>>')
+  lines.push('')
+  lines.push('export const SCHEMA_VALIDATORS: SchemaValidatorsByTable = {')
+  for (const def of definitions) {
+    lines.push(`  ${JSON.stringify(def.tableName)}: {`)
+    lines.push(`    "_id": "v.id()",`)
+    for (const field of getImplicitSystemFields(def)) {
+      lines.push(
+        `    ${JSON.stringify(field.name)}: ${JSON.stringify(systemFieldValidator(field.name))},`,
+      )
+    }
+    for (const [columnName, col] of Object.entries(def.columns)) {
+      lines.push(
+        `    ${JSON.stringify(columnName)}: ${JSON.stringify(renderValidatorSource(col.validator))},`,
+      )
+    }
+    lines.push('  },')
+  }
+  lines.push('}')
+  lines.push('')
+  lines.push('export type SchemaSourcesByTable = Record<TableName, string>')
+  lines.push('')
+  lines.push('export const SCHEMA_SOURCES: SchemaSourcesByTable = {')
+  for (const def of definitions) {
+    lines.push(
+      `  ${JSON.stringify(def.tableName)}: ${JSON.stringify(renderSchemaSource(def))},`,
+    )
+  }
+  lines.push('}')
   lines.push('')
 
   // SchemaCollections interface
@@ -368,6 +420,126 @@ function renderTsType(col: ColumnDescriptor): string {
   }
 
   return col.tsType
+}
+
+function renderValidatorSource(validator: ColumnValidatorDescriptor): string {
+  switch (validator.kind) {
+    case 'string':
+      return 'v.string()'
+    case 'number':
+      return 'v.number()'
+    case 'float':
+      return 'v.float()'
+    case 'boolean':
+      return 'v.boolean()'
+    case 'id':
+      return validator.enforceExists
+        ? `v.id('${validator.referencedTable}', { enforceExists: true })`
+        : `v.id('${validator.referencedTable}')`
+    case 'array':
+      return `v.array(${renderValidatorSource(validator.element)})`
+    case 'object':
+      return `v.object({ ${Object.entries(validator.fields)
+        .map(
+          ([fieldName, fieldValidator]) =>
+            `${fieldName}: ${renderValidatorSource(fieldValidator)}`,
+        )
+        .join(', ')} })`
+    case 'record':
+      return `v.record(${renderValidatorSource(validator.keys)}, ${renderValidatorSource(validator.values)})`
+    case 'nullable':
+      return `v.nullable(${renderValidatorSource(validator.inner)})`
+    case 'default':
+      return `v.default(${renderValidatorSource(validator.inner)}, ${renderJsValueLiteral(validator.value)})`
+  }
+}
+
+function renderValidatorDescriptorLiteral(
+  validator: ColumnValidatorDescriptor,
+): string {
+  return renderJsValueLiteral(validator)
+}
+
+function renderSchemaSource(def: TableDefinition): string {
+  const schemaFields = Object.entries(def.columns).map(
+    ([columnName, col]) => `  ${columnName}: ${renderValidatorSource(col.validator)},`,
+  )
+
+  let source = `import { defineTable, v } from '@sink/lib'\n\nexport default defineTable('${def.tableName}', {\n${schemaFields.join('\n')}\n})`
+
+  if (def.options.withCreatedAt) {
+    source += '\n  .withCreatedAt(true)'
+  }
+
+  if (def.options.withUpdatedAt) {
+    source += '\n  .withUpdatedAt(true)'
+  }
+
+  if (def.options.withArchivedAt) {
+    source += '\n  .withArchivedAt(true)'
+  }
+
+  for (const index of def.indexes) {
+    if (index.staged) {
+      source += `\n  .index('${index.name}', { fields: ${renderStringArrayLiteral(index.fields)}, staged: true${index.unique ? ', unique: true' : ''} })`
+      continue
+    }
+
+    const methodName = index.unique ? 'uniqueIndex' : 'index'
+    source += `\n  .${methodName}('${index.name}', ${renderStringArrayLiteral(index.fields)})`
+  }
+
+  return source
+}
+
+function renderJsValueLiteral(value: unknown): string {
+  if (typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+
+  if (typeof value === 'bigint') {
+    return `${value}n`
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  if (value === null) {
+    return 'null'
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => renderJsValueLiteral(item)).join(', ')}]`
+  }
+
+  if (isPlainObject(value)) {
+    return `{ ${Object.entries(value)
+      .map(
+        ([key, nestedValue]) =>
+          `${JSON.stringify(key)}: ${renderJsValueLiteral(nestedValue)}`,
+      )
+      .join(', ')} }`
+  }
+
+  return 'undefined'
+}
+
+function renderStringArrayLiteral(values: readonly string[]): string {
+  return `[${values.map((value) => JSON.stringify(value)).join(', ')}]`
+}
+
+function systemFieldValidator(fieldName: string): string {
+  switch (fieldName) {
+    case '_createdAt':
+      return 'v.number()'
+    case '_updatedAt':
+      return 'v.number()'
+    case '_archivedAt':
+      return 'v.nullable(v.number())'
+    default:
+      return 'v.string()'
+  }
 }
 
 function systemIdTsType(tableName: string): string {
