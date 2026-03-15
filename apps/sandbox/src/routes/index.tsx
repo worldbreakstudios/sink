@@ -15,8 +15,9 @@ import {
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
 import type { SqliteReferenceColumn } from '@sink/lib'
-import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
+import { INDEXES, REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
+  buildOffsetCursorInput,
   CreateTableModal,
   DataTable,
   DeleteRowsModal,
@@ -179,9 +180,20 @@ function App() {
         })
         .order(activeQuery.orderDirection)
 
+      const activeTableIndexes =
+        selectedTable === undefined
+          ? {}
+          : (INDEXES[selectedTable.name as TableName] ?? {}) as Record<
+              string,
+              { fields: readonly string[] }
+            >
+
       const offsetCursor =
-        activeQuery.queryMethod === 'take' && activeQuery.offsetCursor.trim() !== ''
-          ? parseValue(activeQuery.offsetCursor)
+        activeQuery.queryMethod === 'take'
+          ? buildOffsetCursorInput(
+              [...(activeTableIndexes[activeQuery.indexName]?.fields ?? [])],
+              activeQuery.offsetCursor,
+            )
           : null
 
       if (offsetCursor !== null) {
@@ -202,7 +214,7 @@ function App() {
           return sqliteQuery.toLiveQuery(q)
       }
     },
-    [activeQuery, selectedCollection],
+    [activeQuery, selectedCollection, selectedTable?.name],
   )
 
   const queryResult = useMemo<QueryResult | null>(() => {

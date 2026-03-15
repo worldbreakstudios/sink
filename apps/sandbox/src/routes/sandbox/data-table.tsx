@@ -63,6 +63,8 @@ interface Constraint {
   value: string
 }
 
+export type OffsetCursorValues = Record<string, string>
+
 interface HistoryEntry {
   id: string
   tableName: string
@@ -71,7 +73,7 @@ interface HistoryEntry {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
-  offsetCursor?: string
+  offsetCursor?: OffsetCursorValues | string
   generatedCode: string
   timestamp: number
 }
@@ -207,6 +209,110 @@ export function parseValue(value: string): unknown {
   return value
 }
 
+function formatInputValue(value: unknown): string {
+  if (value === null) return 'null'
+  if (value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'bigint') return `${value}n`
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
+function countFilledOffsetCursorFields(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): number {
+  return indexFields.filter((field) => (offsetCursor[field] ?? '').trim() !== '').length
+}
+
+export function buildOffsetCursorInput(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): unknown | null {
+  const filledFieldCount = countFilledOffsetCursorFields(indexFields, offsetCursor)
+
+  if (filledFieldCount === 0 || filledFieldCount !== indexFields.length) {
+    return null
+  }
+
+  if (indexFields.length === 1) {
+    return parseValue(offsetCursor[indexFields[0]!] ?? '')
+  }
+
+  return Object.fromEntries(
+    indexFields.map((field) => [field, parseValue(offsetCursor[field] ?? '')]),
+  )
+}
+
+function formatOffsetCursorForCode(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): string | null {
+  const cursorInput = buildOffsetCursorInput(indexFields, offsetCursor)
+
+  if (cursorInput === null) {
+    return null
+  }
+
+  if (indexFields.length === 1) {
+    return formatValueForCode(offsetCursor[indexFields[0]!] ?? '')
+  }
+
+  return `{ ${indexFields
+    .map((field) => `${JSON.stringify(field)}: ${formatValueForCode(offsetCursor[field] ?? '')}`)
+    .join(', ')} }`
+}
+
+function normalizeOffsetCursorValues(
+  rawOffsetCursor: OffsetCursorValues | string | undefined,
+  indexFields: string[],
+): OffsetCursorValues {
+  if (!rawOffsetCursor) {
+    return {}
+  }
+
+  if (typeof rawOffsetCursor === 'string') {
+    if (rawOffsetCursor.trim() === '') {
+      return {}
+    }
+
+    if (indexFields.length === 1) {
+      const field = indexFields[0]
+      return field ? { [field]: rawOffsetCursor } : {}
+    }
+
+    try {
+      const parsed = JSON.parse(rawOffsetCursor) as Record<string, unknown>
+
+      return Object.fromEntries(
+        indexFields.flatMap((field) =>
+          field in parsed ? [[field, formatInputValue(parsed[field])]] : [],
+        ),
+      )
+    } catch {
+      return {}
+    }
+  }
+
+  return Object.fromEntries(
+    indexFields.flatMap((field) => {
+      const value = rawOffsetCursor[field]
+
+      if ((value ?? '').trim() === '') {
+        return []
+      }
+
+      return [[field, value]]
+    }),
+  ) as OffsetCursorValues
+}
+
 function formatTimestamp(timestamp: number): string {
   const now = new Date()
   const diffMs = now.getTime() - timestamp
@@ -275,7 +381,7 @@ export interface QueryState {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
-  offsetCursor: string
+  offsetCursor: OffsetCursorValues
 }
 
 export interface QueryResult {
@@ -360,7 +466,7 @@ export function DataTable({
   const [orderDirection, setOrderDirection] = useState<'asc' | 'desc'>('asc')
   const [queryMethod, setQueryMethod] = useState<QueryMethod>('collect')
   const [takeCount, setTakeCount] = useState<string>('10')
-  const [offsetCursor, setOffsetCursor] = useState<string>('')
+  const [offsetCursor, setOffsetCursor] = useState<OffsetCursorValues>({})
   const [isRunning, setIsRunning] = useState(false)
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
@@ -458,17 +564,27 @@ export function DataTable({
     return !!tableIndexes[selectedIndex].unique
   }, [selectedIndex, tableIndexes])
 
-  const offsetPlaceholder = useMemo(() => {
-    if (indexFields.length === 0) {
-      return 'cursor'
-    }
+  const filledOffsetCursorFieldCount = useMemo(
+    () => countFilledOffsetCursorFields(indexFields, offsetCursor),
+    [indexFields, offsetCursor],
+  )
 
-    if (indexFields.length === 1) {
-      return indexFields[0] ?? 'cursor'
-    }
+  const hasOffsetCursor = filledOffsetCursorFieldCount > 0
+  const hasPartialOffsetCursor = hasOffsetCursor && filledOffsetCursorFieldCount < indexFields.length
 
-    return JSON.stringify(
-      Object.fromEntries(indexFields.map((field) => [field, '...'])),
+  useEffect(() => {
+    setOffsetCursor((currentOffsetCursor) =>
+      Object.fromEntries(
+        indexFields.flatMap((field) => {
+          const value = currentOffsetCursor[field]
+
+          if ((value ?? '').trim() === '') {
+            return []
+          }
+
+          return [[field, value]]
+        }),
+      ) as OffsetCursorValues,
     )
   }, [indexFields])
 
@@ -520,8 +636,13 @@ export function DataTable({
 
     code += `\n    .order('${orderDirection}')`
 
-    if (queryMethod === 'take' && offsetCursor.trim() !== '') {
-      code += `\n    .offset(${formatValueForCode(offsetCursor)})`
+    const offsetCursorCode =
+      queryMethod === 'take'
+        ? formatOffsetCursorForCode(indexFields, offsetCursor)
+        : null
+
+    if (offsetCursorCode !== null) {
+      code += `\n    .offset(${offsetCursorCode})`
     }
 
     switch (queryMethod) {
@@ -541,7 +662,7 @@ export function DataTable({
     }
 
     return code
-  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor])
+  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor, indexFields])
 
   // Load saved layout when table changes
   useEffect(() => {
@@ -662,7 +783,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
-      offsetCursor,
+      offsetCursor: { ...offsetCursor },
     })
     setIsRunning(false)
 
@@ -675,7 +796,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
-      offsetCursor,
+      offsetCursor: { ...offsetCursor },
       generatedCode,
       timestamp: Date.now(),
     }
@@ -714,6 +835,20 @@ export function DataTable({
     )
   }, [getOperatorOptionsForField])
 
+  const updateOffsetCursorField = useCallback((field: string, value: string) => {
+    setOffsetCursor((prev) => {
+      const next = { ...prev }
+
+      if (value.trim() === '') {
+        delete next[field]
+      } else {
+        next[field] = value
+      }
+
+      return next
+    })
+  }, [])
+
   const removeConstraint = useCallback((index: number) => {
     setConstraints((prev) => prev.filter((_, i) => i !== index))
   }, [])
@@ -724,7 +859,7 @@ export function DataTable({
     setOrderDirection('asc')
     setQueryMethod('collect')
     setTakeCount('10')
-    setOffsetCursor('')
+    setOffsetCursor({})
     onClearQuery?.()
   }, [onClearQuery])
 
@@ -744,14 +879,21 @@ export function DataTable({
   }, [tableIndexes])
 
   const restoreFromHistory = useCallback((entry: HistoryEntry) => {
+    const historyIndexFields = tableIndexes[entry.indexName]?.fields
+
     setSelectedIndex(entry.indexName)
     setConstraints(entry.constraints)
     setOrderDirection(entry.orderDirection)
     setQueryMethod(entry.queryMethod)
     setTakeCount(entry.takeCount)
-    setOffsetCursor(entry.offsetCursor ?? '')
+    setOffsetCursor(
+      normalizeOffsetCursorValues(
+        entry.offsetCursor,
+        historyIndexFields ? [...historyIndexFields] : [],
+      ),
+    )
     setActiveTab('filters')
-  }, [])
+  }, [tableIndexes])
 
   const removeFromHistory = useCallback((id: string) => {
     setHistory((prev) => {
@@ -770,8 +912,9 @@ export function DataTable({
     let count = 0
     if (selectedIndex) count++
     count += constraints.filter(isConstraintActive).length
+    if (queryMethod === 'take' && hasOffsetCursor) count++
     return count
-  }, [selectedIndex, constraints])
+  }, [selectedIndex, constraints, queryMethod, hasOffsetCursor])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -897,7 +1040,7 @@ export function DataTable({
                       setSelectedIndex(value === '_default' ? '' : value)
                       setConstraints([])
                       setQueryMethod('collect')
-                      setOffsetCursor('')
+                      setOffsetCursor({})
                     }}
                   >
                     <SelectTrigger className="h-8 flex-1 text-sm">
@@ -1028,23 +1171,35 @@ export function DataTable({
                       </SelectContent>
                     </Select>
                     {queryMethod === 'take' && (
-                      <>
-                        <Input
-                          type="number"
-                          value={takeCount}
-                          onChange={(e) => setTakeCount(e.target.value)}
-                          placeholder="Limit"
-                          className="h-8 w-20 text-sm"
-                          min="1"
-                        />
-                        <Input
-                          value={offsetCursor}
-                          onChange={(e) => setOffsetCursor(e.target.value)}
-                          placeholder={offsetPlaceholder}
-                          className="h-8 min-w-36 flex-1 text-sm"
-                        />
-                      </>
+                      <Input
+                        type="number"
+                        value={takeCount}
+                        onChange={(e) => setTakeCount(e.target.value)}
+                        placeholder="Limit"
+                        className="h-8 w-20 text-sm"
+                        min="1"
+                      />
                     )}
+                  </div>
+                )}
+
+                {selectedIndex && queryMethod === 'take' && indexFields.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">After</label>
+                      <span className="text-xs text-muted-foreground">Start after this index key</span>
+                    </div>
+                    {indexFields.map((field) => (
+                      <div key={field} className="ml-[72px] flex items-center gap-2">
+                        <span className="w-24 shrink-0 text-xs font-medium">{field}</span>
+                        <Input
+                          value={offsetCursor[field] ?? ''}
+                          onChange={(e) => updateOffsetCursorField(field, e.target.value)}
+                          placeholder={`Cursor ${field}`}
+                          className="h-7 flex-1 text-xs"
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -1052,10 +1207,16 @@ export function DataTable({
                 <div className="flex items-center gap-2 pt-2">
                   <Button
                     onClick={handleRun}
-                    disabled={isRunning || !collections || !selectedIndex || !isUniqueQueryValid}
+                    disabled={isRunning || !collections || !selectedIndex || !isUniqueQueryValid || hasPartialOffsetCursor}
                     size="sm"
                   >
-                    {isRunning ? 'Running...' : queryMethod === 'unique' && !isUniqueQueryValid ? 'Fill all fields' : 'Apply Filter'}
+                    {isRunning
+                      ? 'Running...'
+                      : queryMethod === 'unique' && !isUniqueQueryValid
+                        ? 'Fill all fields'
+                        : hasPartialOffsetCursor
+                          ? 'Fill cursor keys'
+                          : 'Apply Filter'}
                   </Button>
                   <Button variant="outline" size="sm" onClick={handleClear}>
                     Clear

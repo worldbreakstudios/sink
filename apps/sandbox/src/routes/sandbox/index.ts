@@ -1,6 +1,6 @@
 export { CollectionCounter } from './collection-counter'
 export { CreateTableModal } from './create-table-modal'
-export { DataTable, parseValue, type QueryState, type QueryResult } from './data-table'
+export { DataTable, buildOffsetCursorInput, parseValue, type QueryState, type QueryResult } from './data-table'
 export { DeleteRowsModal } from './delete-rows-modal'
 export { IndexedQueryPreview, type IndexedQueryPreviewData } from './indexed-query-preview'
 export { InsertRowModal, type InsertModalState } from './insert-row-modal'
