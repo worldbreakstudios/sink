@@ -71,6 +71,7 @@ interface HistoryEntry {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
+  offsetCursor?: string
   generatedCode: string
   timestamp: number
 }
@@ -274,6 +275,7 @@ export interface QueryState {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
+  offsetCursor: string
 }
 
 export interface QueryResult {
@@ -358,6 +360,7 @@ export function DataTable({
   const [orderDirection, setOrderDirection] = useState<'asc' | 'desc'>('asc')
   const [queryMethod, setQueryMethod] = useState<QueryMethod>('collect')
   const [takeCount, setTakeCount] = useState<string>('10')
+  const [offsetCursor, setOffsetCursor] = useState<string>('')
   const [isRunning, setIsRunning] = useState(false)
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
@@ -455,6 +458,20 @@ export function DataTable({
     return !!tableIndexes[selectedIndex].unique
   }, [selectedIndex, tableIndexes])
 
+  const offsetPlaceholder = useMemo(() => {
+    if (indexFields.length === 0) {
+      return 'cursor'
+    }
+
+    if (indexFields.length === 1) {
+      return indexFields[0] ?? 'cursor'
+    }
+
+    return JSON.stringify(
+      Object.fromEntries(indexFields.map((field) => [field, '...'])),
+    )
+  }, [indexFields])
+
   // When a unique index is selected, pre-populate all fields as constraints
   useEffect(() => {
     if (isUniqueIndex && indexFields.length > 0) {
@@ -503,6 +520,10 @@ export function DataTable({
 
     code += `\n    .order('${orderDirection}')`
 
+    if (queryMethod === 'take' && offsetCursor.trim() !== '') {
+      code += `\n    .offset(${formatValueForCode(offsetCursor)})`
+    }
+
     switch (queryMethod) {
       case 'first':
         code += `\n    .toLiveQuery(q, { single: true })\n)`
@@ -520,7 +541,7 @@ export function DataTable({
     }
 
     return code
-  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount])
+  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor])
 
   // Load saved layout when table changes
   useEffect(() => {
@@ -641,6 +662,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
+      offsetCursor,
     })
     setIsRunning(false)
 
@@ -653,6 +675,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
+      offsetCursor,
       generatedCode,
       timestamp: Date.now(),
     }
@@ -661,7 +684,7 @@ export function DataTable({
       saveHistory(updated)
       return updated
     })
-  }, [collections, selectedIndex, constraints, orderDirection, queryMethod, takeCount, tableName, generatedCode, onRunQuery])
+  }, [collections, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor, tableName, generatedCode, onRunQuery])
 
   const addConstraint = useCallback(() => {
     const firstField = indexFields[0]
@@ -701,6 +724,7 @@ export function DataTable({
     setOrderDirection('asc')
     setQueryMethod('collect')
     setTakeCount('10')
+    setOffsetCursor('')
     onClearQuery?.()
   }, [onClearQuery])
 
@@ -725,6 +749,7 @@ export function DataTable({
     setOrderDirection(entry.orderDirection)
     setQueryMethod(entry.queryMethod)
     setTakeCount(entry.takeCount)
+    setOffsetCursor(entry.offsetCursor ?? '')
     setActiveTab('filters')
   }, [])
 
@@ -872,6 +897,7 @@ export function DataTable({
                       setSelectedIndex(value === '_default' ? '' : value)
                       setConstraints([])
                       setQueryMethod('collect')
+                      setOffsetCursor('')
                     }}
                   >
                     <SelectTrigger className="h-8 flex-1 text-sm">
@@ -1002,14 +1028,22 @@ export function DataTable({
                       </SelectContent>
                     </Select>
                     {queryMethod === 'take' && (
-                      <Input
-                        type="number"
-                        value={takeCount}
-                        onChange={(e) => setTakeCount(e.target.value)}
-                        placeholder="10"
-                        className="h-8 w-16 text-sm"
-                        min="1"
-                      />
+                      <>
+                        <Input
+                          type="number"
+                          value={takeCount}
+                          onChange={(e) => setTakeCount(e.target.value)}
+                          placeholder="Limit"
+                          className="h-8 w-20 text-sm"
+                          min="1"
+                        />
+                        <Input
+                          value={offsetCursor}
+                          onChange={(e) => setOffsetCursor(e.target.value)}
+                          placeholder={offsetPlaceholder}
+                          className="h-8 min-w-36 flex-1 text-sm"
+                        />
+                      </>
                     )}
                   </div>
                 )}

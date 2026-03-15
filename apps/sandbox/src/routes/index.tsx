@@ -179,6 +179,15 @@ function App() {
         })
         .order(activeQuery.orderDirection)
 
+      const offsetCursor =
+        activeQuery.queryMethod === 'take' && activeQuery.offsetCursor.trim() !== ''
+          ? parseValue(activeQuery.offsetCursor)
+          : null
+
+      if (offsetCursor !== null) {
+        sqliteQuery.offset(offsetCursor)
+      }
+
       switch (activeQuery.queryMethod) {
         case 'first':
           return sqliteQuery.toLiveQuery(q, { single: true })

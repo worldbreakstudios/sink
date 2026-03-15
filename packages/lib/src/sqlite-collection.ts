@@ -318,23 +318,30 @@ export interface SqliteQuery<
   order(direction: "asc" | "desc"): SqliteQuery<TRow, TIndexes>;
 
   /**
-   * Execute the query and return all matching rows.
+   * Start the result window strictly after the provided index key.
+   * For multi-field indexes, pass an object keyed by the indexed fields.
+   */
+  offset(cursor: unknown): SqliteQuery<TRow, TIndexes>;
+
+  /**
+   * Execute the query and return all matching rows after the offset key.
    */
   collect(): Promise<TRow[]>;
 
   /**
-   * Execute the query and return the first matching row, or null.
+   * Execute the query and return the first matching row after the offset key,
+   * or null.
    */
   first(): Promise<TRow | null>;
 
   /**
-   * Execute the query and return the single matching row.
+   * Execute the query and return the single matching row after the offset key.
    * Throws if more than one row matches.
    */
   unique(): Promise<TRow | null>;
 
   /**
-   * Execute the query and return up to `limit` rows.
+   * Execute the query and return up to `limit` rows after the offset key.
    */
   take(limit: number): Promise<TRow[]>;
 
@@ -977,7 +984,25 @@ function combineLiveExpressions(expressions: unknown[]): unknown | null {
   return and(first as never, second as never, ...(rest as never[]));
 }
 
-function buildLiveWhereExpression(
+function combineLiveOrExpressions(expressions: unknown[]): unknown | null {
+  if (expressions.length === 0) {
+    return null;
+  }
+
+  if (expressions.length === 1) {
+    return expressions[0] ?? null;
+  }
+
+  const [first, second, ...rest] = expressions;
+
+  if (!first || !second) {
+    return first ?? second ?? null;
+  }
+
+  return or(first as never, second as never, ...(rest as never[]));
+}
+
+function buildLiveRangeExpression(
   row: Record<string, unknown>,
   range: SqliteQueryRangeState,
 ): unknown | null {
@@ -1033,11 +1058,62 @@ function buildLiveWhereExpression(
   return combineLiveExpressions(expressions);
 }
 
+function buildLiveCursorExpression(
+  row: Record<string, unknown>,
+  indexFields: readonly string[],
+  cursorValues: Record<string, unknown> | null,
+  direction: "asc" | "desc",
+): unknown | null {
+  if (!cursorValues || indexFields.length === 0) {
+    return null;
+  }
+
+  const comparisonOperator = direction === "asc" ? gt : lt;
+  const cursorBranches: unknown[] = [];
+
+  for (let fieldIndex = 0; fieldIndex < indexFields.length; fieldIndex += 1) {
+    const field = indexFields[fieldIndex];
+
+    if (!field) {
+      continue;
+    }
+
+    const branchExpressions: unknown[] = [];
+
+    for (let prefixIndex = 0; prefixIndex < fieldIndex; prefixIndex += 1) {
+      const prefixField = indexFields[prefixIndex];
+
+      if (!prefixField) {
+        continue;
+      }
+
+      branchExpressions.push(
+        eq(
+          getFieldPathRef(row, prefixField) as never,
+          cursorValues[prefixField] as never,
+        ),
+      );
+    }
+
+    branchExpressions.push(
+      comparisonOperator(
+        getFieldPathRef(row, field) as never,
+        cursorValues[field] as never,
+      ),
+    );
+
+    cursorBranches.push(combineLiveExpressions(branchExpressions));
+  }
+
+  return combineLiveOrExpressions(cursorBranches);
+}
+
 function createTanStackLiveQuery<TRow extends object>(
   query: InitialQueryBuilder,
   sourceCollection: Collection<TRow, string | number, SqliteCollectionUtils<TRow>>,
   range: SqliteQueryRangeState,
   indexFields: readonly string[],
+  cursorValues: Record<string, unknown> | null,
   direction: "asc" | "desc",
   options?: SqliteLiveQueryOptions,
 ): QueryBuilder<any> {
@@ -1050,13 +1126,22 @@ function createTanStackLiveQuery<TRow extends object>(
     range.likes.length > 0 ||
     range.nullChecks.length > 0 ||
     range.lowerBound !== null ||
-    range.upperBound !== null
+    range.upperBound !== null ||
+    cursorValues !== null
   ) {
     liveQuery = liveQuery.where(({ row }) => {
-      const expression = buildLiveWhereExpression(
-        row as unknown as Record<string, unknown>,
-        range,
-      );
+      const expression = combineLiveExpressions([
+        buildLiveRangeExpression(
+          row as unknown as Record<string, unknown>,
+          range,
+        ),
+        buildLiveCursorExpression(
+          row as unknown as Record<string, unknown>,
+          indexFields,
+          cursorValues,
+          direction,
+        ),
+      ]);
 
       if (!expression) {
         throw new Error("Expected a live query filter expression.");
@@ -1087,6 +1172,45 @@ function createTanStackLiveQuery<TRow extends object>(
   return liveQuery;
 }
 
+function normalizeIndexCursor(
+  cursor: unknown,
+  indexFields: readonly string[],
+): Record<string, unknown> {
+  if (indexFields.length === 0) {
+    throw new Error("Cannot offset a query without index fields.");
+  }
+
+  if (indexFields.length === 1) {
+    const field = indexFields[0];
+
+    if (!field) {
+      throw new Error("Missing index field.");
+    }
+
+    if (isPlainObject(cursor) && field in cursor) {
+      return { [field]: cursor[field] };
+    }
+
+    return { [field]: cursor };
+  }
+
+  if (!isPlainObject(cursor)) {
+    throw new Error(
+      `Composite index offsets must be objects with fields: ${indexFields.join(", ")}.`,
+    );
+  }
+
+  return Object.fromEntries(
+    indexFields.map((field) => {
+      if (!(field in cursor)) {
+        throw new Error(`Missing offset field "${field}".`);
+      }
+
+      return [field, cursor[field]];
+    }),
+  );
+}
+
 function createSqliteQuery<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
@@ -1111,13 +1235,17 @@ function createSqliteQuery<
 ): SqliteQuery<TRow, TIndexes> {
   let indexFields = initialIndexFields;
   let range = initialRange;
+  let cursorInput: unknown | null = null;
   let direction: "asc" | "desc" = "asc";
 
   const run = async (limit?: number): Promise<TRow[]> => {
+    const cursorValues =
+      cursorInput === null ? null : normalizeIndexCursor(cursorInput, indexFields);
     const { sql, bind } = buildIndexedSelectSql(
       tableName,
       indexFields,
       range,
+      cursorValues,
       direction,
       structuredColumns,
       limit,
@@ -1160,6 +1288,10 @@ function createSqliteQuery<
       direction = nextDirection;
       return this;
     },
+    offset(cursor) {
+      cursorInput = cursor;
+      return this;
+    },
     async collect() {
       return run();
     },
@@ -1185,6 +1317,7 @@ function createSqliteQuery<
         sourceCollection,
         range,
         indexFields,
+        cursorInput === null ? null : normalizeIndexCursor(cursorInput, indexFields),
         direction,
         options,
       );
@@ -1742,6 +1875,7 @@ function buildIndexedSelectSql(
   tableName: string,
   indexFields: readonly string[],
   range: SqliteQueryRangeState,
+  cursorValues: Record<string, unknown> | null,
   direction: "asc" | "desc",
   structuredColumns: StructuredColumns,
   limit?: number,
@@ -1801,6 +1935,17 @@ function buildIndexedSelectSql(
     );
   }
 
+  if (cursorValues) {
+    appendCursorClause(
+      whereClauses,
+      bind,
+      indexFields,
+      cursorValues,
+      direction,
+      structuredColumns,
+    );
+  }
+
   const whereSql =
     whereClauses.length > 0 ? ` WHERE ${whereClauses.join(" AND ")}` : "";
   const orderSql = ` ORDER BY ${indexFields
@@ -1839,6 +1984,55 @@ function appendNullCheckClause(
   operator: SqliteNullCheckOperator,
 ): void {
   whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator}`);
+}
+
+function appendCursorClause(
+  whereClauses: string[],
+  bind: unknown[],
+  indexFields: readonly string[],
+  cursorValues: Record<string, unknown>,
+  direction: "asc" | "desc",
+  structuredColumns: StructuredColumns,
+): void {
+  const comparisonOperator = direction === "asc" ? ">" : "<";
+  const branchClauses: string[] = [];
+
+  for (let fieldIndex = 0; fieldIndex < indexFields.length; fieldIndex += 1) {
+    const field = indexFields[fieldIndex];
+
+    if (!field) {
+      continue;
+    }
+
+    const branchParts: string[] = [];
+
+    for (let prefixIndex = 0; prefixIndex < fieldIndex; prefixIndex += 1) {
+      const prefixField = indexFields[prefixIndex];
+
+      if (!prefixField) {
+        continue;
+      }
+
+      branchParts.push(`${fieldPathToSqlExpression(prefixField)} = ?`);
+      bind.push(
+        serializeQueryValue(
+          prefixField,
+          cursorValues[prefixField],
+          structuredColumns,
+        ),
+      );
+    }
+
+    branchParts.push(`${fieldPathToSqlExpression(field)} ${comparisonOperator} ?`);
+    bind.push(
+      serializeQueryValue(field, cursorValues[field], structuredColumns),
+    );
+    branchClauses.push(`(${branchParts.join(" AND ")})`);
+  }
+
+  if (branchClauses.length > 0) {
+    whereClauses.push(`(${branchClauses.join(" OR ")})`);
+  }
 }
 
 function serializeQueryValue(
