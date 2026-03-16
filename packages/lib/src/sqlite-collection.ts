@@ -22,6 +22,11 @@ import {
 } from "@tanstack/db";
 import type { SqlValue } from "@sqlite.org/sqlite-wasm";
 import type { LocalOnlyCollectionUtils } from "@tanstack/db";
+import {
+  appendSqliteMutationEventsToLog,
+  ensureSqliteSyncTables,
+} from "./sqlite-sync-core";
+import type { SqliteMutationOrigin } from "./sqlite-sync-core";
 import type {
   AsyncSqliteDatabase,
   SqliteCompositeKey,
@@ -117,12 +122,15 @@ export interface SqliteMutationRowDiff {
 }
 
 export interface SqliteMutationEvent {
+  eventId: string;
+  origin: SqliteMutationOrigin;
   tableName: string;
   sourceInstanceId: string;
   mutationType: PendingMutation<Record<string, unknown>>["type"];
   keyColumns: readonly string[];
   rowDiffs: SqliteMutationRowDiff[];
   publishedAt: number;
+  serverSequence: number | null;
 }
 
 export interface SqliteLiveQueryOptions {
@@ -1334,6 +1342,7 @@ async function persistSqliteMutations<TRow extends object>(
 ): Promise<SqliteMutationEvent[]> {
   const mutationEvents: SqliteMutationEvent[] = [];
 
+  await ensureSqliteSyncTables(options.database);
   await options.database.execute("BEGIN");
 
   try {
@@ -1349,6 +1358,7 @@ async function persistSqliteMutations<TRow extends object>(
       );
     }
 
+    await appendSqliteMutationEventsToLog(options.database, mutationEvents);
     await options.database.execute("COMMIT");
     return mutationEvents;
   } catch (error) {
@@ -1477,12 +1487,15 @@ function createMutationEvent<TRow extends object>(
   );
 
   return {
+    eventId: crypto.randomUUID(),
+    origin: "local",
     tableName: options.tableName,
     sourceInstanceId,
     mutationType: mutation.type,
     keyColumns: [...options.keyColumns],
     rowDiffs,
     publishedAt: Date.now(),
+    serverSequence: null,
   };
 }
 

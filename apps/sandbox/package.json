@@ -9,6 +9,7 @@
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "preview": "vite preview",
+    "sync:server": "node --experimental-strip-types --experimental-specifier-resolution=node ./sync-server.ts",
     "test": "vitest run",
     "lint": "eslint",
     "typecheck": "tsc --project tsconfig.json --noEmit",

@@ -1,3 +1,5 @@
 export * from './sqlite.js'
 export * from './sqlite-collection.js'
+export * from './sqlite-sync-core.js'
+export * from './sqlite-sync-client.js'
 export * from './schema.js'
