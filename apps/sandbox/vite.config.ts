@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
+import { fileURLToPath } from 'node:url'
 
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 
@@ -20,6 +21,9 @@ const config = defineConfig({
     include: ['@tanstack/db'],
   },
   resolve: {
+    alias: {
+      '@sink/lib': fileURLToPath(new URL('../../packages/lib/src/index.ts', import.meta.url)),
+    },
     dedupe: ['@tanstack/db'],
   },
   plugins: [

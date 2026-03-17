@@ -32,7 +32,12 @@ import {
   REFERENCE_COLUMNS,
   SCHEMA_VALIDATORS,
 } from '@/data/generated/schema.gen'
-import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import {
+  getSqliteDemoRowKey,
+  serializeSqliteDemoKey,
+  type SqliteDemoId,
+  type SqliteDemoRow,
+} from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
 import {
@@ -49,7 +54,7 @@ const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 const HISTORY_STORAGE_KEY = 'sandbox-query-history'
 const MAX_HISTORY_ITEMS = 50
 
-type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
+type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'isKnown' | 'isUnknown'
 type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
 
 interface Constraint {
@@ -57,6 +62,8 @@ interface Constraint {
   operator: Operator
   value: string
 }
+
+export type OffsetCursorValues = Record<string, string>
 
 interface HistoryEntry {
   id: string
@@ -66,8 +73,49 @@ interface HistoryEntry {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
+  offsetCursor?: OffsetCursorValues | string
   generatedCode: string
   timestamp: number
+}
+
+const OPERATORS: Array<{ value: Operator; label: string }> = [
+  { value: 'eq', label: '=' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '>=' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '<=' },
+  { value: 'like', label: 'LIKE' },
+  { value: 'isKnown', label: 'IS KNOWN' },
+  { value: 'isUnknown', label: 'IS UNKNOWN' },
+]
+
+function operatorNeedsValue(operator: Operator): boolean {
+  return operator !== 'isKnown' && operator !== 'isUnknown'
+}
+
+function isConstraintActive(constraint: Constraint): boolean {
+  return operatorNeedsValue(constraint.operator)
+    ? constraint.value.trim() !== ''
+    : true
+}
+
+function isTextBackedSqlType(columnType: string | undefined): boolean {
+  if (!columnType) {
+    return false
+  }
+
+  const sqlType = columnType.toUpperCase()
+
+  return (
+    (sqlType.includes('TEXT') ||
+      sqlType.includes('CHAR') ||
+      sqlType.includes('CLOB')) &&
+    !sqlType.includes('INT') &&
+    !sqlType.includes('REAL') &&
+    !sqlType.includes('FLOA') &&
+    !sqlType.includes('DOUB') &&
+    !sqlType.includes('BOOL')
+  )
 }
 
 function loadHistory(): HistoryEntry[] {
@@ -130,6 +178,14 @@ function formatValueForCode(value: string): string {
   return `'${String(parsed).replace(/'/g, "\\'")}'`
 }
 
+function formatConstraintForCode(constraint: Constraint): string {
+  if (!operatorNeedsValue(constraint.operator)) {
+    return `.${constraint.operator}('${constraint.field}')`
+  }
+
+  return `.${constraint.operator}('${constraint.field}', ${formatValueForCode(constraint.value)})`
+}
+
 export function parseValue(value: string): unknown {
   if (value === '') return ''
   if (value === 'null') return null
@@ -151,6 +207,110 @@ export function parseValue(value: string): unknown {
     }
   }
   return value
+}
+
+function formatInputValue(value: unknown): string {
+  if (value === null) return 'null'
+  if (value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'bigint') return `${value}n`
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
+function countFilledOffsetCursorFields(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): number {
+  return indexFields.filter((field) => (offsetCursor[field] ?? '').trim() !== '').length
+}
+
+export function buildOffsetCursorInput(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): unknown | null {
+  const filledFieldCount = countFilledOffsetCursorFields(indexFields, offsetCursor)
+
+  if (filledFieldCount === 0 || filledFieldCount !== indexFields.length) {
+    return null
+  }
+
+  if (indexFields.length === 1) {
+    return parseValue(offsetCursor[indexFields[0]!] ?? '')
+  }
+
+  return Object.fromEntries(
+    indexFields.map((field) => [field, parseValue(offsetCursor[field] ?? '')]),
+  )
+}
+
+function formatOffsetCursorForCode(
+  indexFields: string[],
+  offsetCursor: OffsetCursorValues,
+): string | null {
+  const cursorInput = buildOffsetCursorInput(indexFields, offsetCursor)
+
+  if (cursorInput === null) {
+    return null
+  }
+
+  if (indexFields.length === 1) {
+    return formatValueForCode(offsetCursor[indexFields[0]!] ?? '')
+  }
+
+  return `{ ${indexFields
+    .map((field) => `${JSON.stringify(field)}: ${formatValueForCode(offsetCursor[field] ?? '')}`)
+    .join(', ')} }`
+}
+
+function normalizeOffsetCursorValues(
+  rawOffsetCursor: OffsetCursorValues | string | undefined,
+  indexFields: string[],
+): OffsetCursorValues {
+  if (!rawOffsetCursor) {
+    return {}
+  }
+
+  if (typeof rawOffsetCursor === 'string') {
+    if (rawOffsetCursor.trim() === '') {
+      return {}
+    }
+
+    if (indexFields.length === 1) {
+      const field = indexFields[0]
+      return field ? { [field]: rawOffsetCursor } : {}
+    }
+
+    try {
+      const parsed = JSON.parse(rawOffsetCursor) as Record<string, unknown>
+
+      return Object.fromEntries(
+        indexFields.flatMap((field) =>
+          field in parsed ? [[field, formatInputValue(parsed[field])]] : [],
+        ),
+      )
+    } catch {
+      return {}
+    }
+  }
+
+  return Object.fromEntries(
+    indexFields.flatMap((field) => {
+      const value = rawOffsetCursor[field]
+
+      if ((value ?? '').trim() === '') {
+        return []
+      }
+
+      return [[field, value]]
+    }),
+  ) as OffsetCursorValues
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -221,11 +381,13 @@ export interface QueryState {
   orderDirection: 'asc' | 'desc'
   queryMethod: QueryMethod
   takeCount: string
+  offsetCursor: OffsetCursorValues
 }
 
 export interface QueryResult {
   rows: SqliteDemoRow[]
   executionTime: number
+  isLive?: boolean
   error?: string
 }
 
@@ -237,8 +399,11 @@ export function DataTable({
   queryResult,
   onCellEdit,
   onAddRow,
+  onDeleteSelected,
+  onClearQuery,
   onRunQuery,
   onSelectionChange,
+  selectedRowKeys,
 }: {
   tableName: string
   columns: { name: string; type: string; pk?: number; notnull?: number }[]
@@ -247,8 +412,11 @@ export function DataTable({
   queryResult: QueryResult | null
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onAddRow: () => void
+  onDeleteSelected?: (rowKeys: string[]) => Promise<void>
+  onClearQuery?: () => void
   onRunQuery: (query: QueryState) => Promise<void>
-  onSelectionChange?: (selectedIds: Set<SqliteDemoId>) => void
+  onSelectionChange?: (selectedIds: Set<string>) => void
+  selectedRowKeys: Set<string>
 }) {
   // Get reference columns for validator display
   const referenceColumns = useMemo(() => {
@@ -263,8 +431,25 @@ export function DataTable({
     }
     return map
   }, [columns])
+  const getOperatorOptionsForField = useCallback((field: string) => {
+    const rootField = field.split('.')[0] ?? field
+    const rootColumnType = columnInfoMap[rootField]?.type
+    const normalizedRootColumnType = rootColumnType?.toUpperCase() ?? ''
+    const supportsLike =
+      isTextBackedSqlType(rootColumnType) &&
+      (field.includes('.') || !normalizedRootColumnType.includes('JSON_'))
+
+    return OPERATORS.filter((operator) => {
+      if (operator.value !== 'like') {
+        return true
+      }
+
+      return supportsLike
+    })
+  }, [columnInfoMap])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
+    rowKey: string
     columnName: string
     value: string
   } | null>(null)
@@ -281,54 +466,64 @@ export function DataTable({
   const [orderDirection, setOrderDirection] = useState<'asc' | 'desc'>('asc')
   const [queryMethod, setQueryMethod] = useState<QueryMethod>('collect')
   const [takeCount, setTakeCount] = useState<string>('10')
+  const [offsetCursor, setOffsetCursor] = useState<OffsetCursorValues>({})
   const [isRunning, setIsRunning] = useState(false)
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Value viewer modal state
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
 
-  // Multi-select state
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
-
-  // Clear selection when table changes
-  useEffect(() => {
-    setSelectedRowIds(new Set())
-  }, [tableName])
-
-  // Notify parent of selection changes
-  useEffect(() => {
-    onSelectionChange?.(selectedRowIds)
-  }, [selectedRowIds, onSelectionChange])
-
   // Display either query results or default rows
   const displayRows = queryResult?.rows ?? rows
   const isFiltered = queryResult !== null
+  const getRowId = useCallback(
+    (row: SqliteDemoRow) => getSqliteDemoRowKey(tableName as TableName, row),
+    [tableName],
+  )
+  const getSerializedRowId = useCallback(
+    (row: SqliteDemoRow) =>
+      serializeSqliteDemoKey(tableName as TableName, getRowId(row)),
+    [getRowId, tableName],
+  )
 
   // Selection helpers
-  const toggleRowSelection = useCallback((rowId: SqliteDemoId) => {
-    setSelectedRowIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(rowId)) {
-        next.delete(rowId)
-      } else {
-        next.add(rowId)
-      }
-      return next
-    })
-  }, [])
+  const toggleRowSelection = useCallback((rowKey: string) => {
+    const next = new Set(selectedRowKeys)
+    if (next.has(rowKey)) {
+      next.delete(rowKey)
+    } else {
+      next.add(rowKey)
+    }
+    onSelectionChange?.(next)
+  }, [onSelectionChange, selectedRowKeys])
 
   const toggleAllSelection = useCallback(() => {
-    setSelectedRowIds((prev) => {
-      if (prev.size === displayRows.length) {
-        return new Set()
-      }
-      return new Set(displayRows.map((r) => r._id))
-    })
-  }, [displayRows])
+    if (selectedRowKeys.size === displayRows.length) {
+      onSelectionChange?.(new Set())
+      return
+    }
 
-  const isAllSelected = displayRows.length > 0 && selectedRowIds.size === displayRows.length
-  const isSomeSelected = selectedRowIds.size > 0 && selectedRowIds.size < displayRows.length
+    onSelectionChange?.(new Set(displayRows.map((row) => getSerializedRowId(row))))
+  }, [displayRows, getSerializedRowId, onSelectionChange, selectedRowKeys.size])
+
+  const isAllSelected = displayRows.length > 0 && selectedRowKeys.size === displayRows.length
+  const isSomeSelected = selectedRowKeys.size > 0 && selectedRowKeys.size < displayRows.length
+
+  const handleDeleteSelectedClick = useCallback(async () => {
+    if (!onDeleteSelected || selectedRowKeys.size === 0) {
+      return
+    }
+
+    setIsDeleting(true)
+
+    try {
+      await onDeleteSelected(Array.from(selectedRowKeys))
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [onDeleteSelected, selectedRowKeys])
 
   const defaultColumnNames = useMemo(() => columns.map((column) => column.name), [columns])
 
@@ -369,6 +564,30 @@ export function DataTable({
     return !!tableIndexes[selectedIndex].unique
   }, [selectedIndex, tableIndexes])
 
+  const filledOffsetCursorFieldCount = useMemo(
+    () => countFilledOffsetCursorFields(indexFields, offsetCursor),
+    [indexFields, offsetCursor],
+  )
+
+  const hasOffsetCursor = filledOffsetCursorFieldCount > 0
+  const hasPartialOffsetCursor = hasOffsetCursor && filledOffsetCursorFieldCount < indexFields.length
+
+  useEffect(() => {
+    setOffsetCursor((currentOffsetCursor) =>
+      Object.fromEntries(
+        indexFields.flatMap((field) => {
+          const value = currentOffsetCursor[field]
+
+          if ((value ?? '').trim() === '') {
+            return []
+          }
+
+          return [[field, value]]
+        }),
+      ) as OffsetCursorValues,
+    )
+  }, [indexFields])
+
   // When a unique index is selected, pre-populate all fields as constraints
   useEffect(() => {
     if (isUniqueIndex && indexFields.length > 0) {
@@ -403,38 +622,47 @@ export function DataTable({
   const generatedCode = useMemo(() => {
     if (!selectedIndex) return `// Select an index to build a query`
 
-    let code = `await collections.${tableName}\n  .query()\n  .withIndex('${selectedIndex}'`
+    let code = `import { useLiveQuery } from '@tanstack/react-db'\n\nconst result = useLiveQuery((q) =>\n  collections.${tableName}\n    .query()\n    .withIndex('${selectedIndex}'`
 
     if (constraints.length > 0) {
-      code += `, (q) => q`
+      code += `, (builder) => builder`
       for (const c of constraints) {
-        code += `\n    .${c.operator}('${c.field}', ${formatValueForCode(c.value)})`
+        code += `\n    ${formatConstraintForCode(c)}`
       }
-      code += `\n  )`
+      code += `\n    )`
     } else {
       code += `)`
     }
 
-    code += `\n  .order('${orderDirection}')`
+    code += `\n    .order('${orderDirection}')`
+
+    const offsetCursorCode =
+      queryMethod === 'take'
+        ? formatOffsetCursorForCode(indexFields, offsetCursor)
+        : null
+
+    if (offsetCursorCode !== null) {
+      code += `\n    .offset(${offsetCursorCode})`
+    }
 
     switch (queryMethod) {
       case 'first':
-        code += `\n  .first()`
+        code += `\n    .toLiveQuery(q, { single: true })\n)`
         break
       case 'unique':
-        code += `\n  .unique()`
+        code += `\n    .toLiveQuery(q, { limit: 2 })\n)\n\nif ((result.data?.length ?? 0) > 1) {\n  throw new Error('Expected a unique result, but found multiple rows.')\n}`
         break
       case 'take':
-        code += `\n  .take(${takeCount || '10'})`
+        code += `\n    .toLiveQuery(q, { limit: ${takeCount || '10'} })\n)`
         break
       case 'collect':
       default:
-        code += `\n  .collect()`
+        code += `\n    .toLiveQuery(q)\n)`
         break
     }
 
     return code
-  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount])
+  }, [tableName, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor, indexFields])
 
   // Load saved layout when table changes
   useEffect(() => {
@@ -555,6 +783,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
+      offsetCursor: { ...offsetCursor },
     })
     setIsRunning(false)
 
@@ -567,6 +796,7 @@ export function DataTable({
       orderDirection,
       queryMethod,
       takeCount,
+      offsetCursor: { ...offsetCursor },
       generatedCode,
       timestamp: Date.now(),
     }
@@ -575,7 +805,7 @@ export function DataTable({
       saveHistory(updated)
       return updated
     })
-  }, [collections, selectedIndex, constraints, orderDirection, queryMethod, takeCount, tableName, generatedCode, onRunQuery])
+  }, [collections, selectedIndex, constraints, orderDirection, queryMethod, takeCount, offsetCursor, tableName, generatedCode, onRunQuery])
 
   const addConstraint = useCallback(() => {
     const firstField = indexFields[0]
@@ -588,8 +818,35 @@ export function DataTable({
 
   const updateConstraint = useCallback((index: number, updates: Partial<Constraint>) => {
     setConstraints((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, ...updates } : c)),
+      prev.map((constraint, i) => {
+        if (i !== index) {
+          return constraint
+        }
+
+        const nextConstraint = { ...constraint, ...updates }
+        const nextOperatorOptions = getOperatorOptionsForField(nextConstraint.field)
+
+        if (!nextOperatorOptions.some((operator) => operator.value === nextConstraint.operator)) {
+          nextConstraint.operator = 'eq'
+        }
+
+        return nextConstraint
+      }),
     )
+  }, [getOperatorOptionsForField])
+
+  const updateOffsetCursorField = useCallback((field: string, value: string) => {
+    setOffsetCursor((prev) => {
+      const next = { ...prev }
+
+      if (value.trim() === '') {
+        delete next[field]
+      } else {
+        next[field] = value
+      }
+
+      return next
+    })
   }, [])
 
   const removeConstraint = useCallback((index: number) => {
@@ -602,7 +859,9 @@ export function DataTable({
     setOrderDirection('asc')
     setQueryMethod('collect')
     setTakeCount('10')
-  }, [])
+    setOffsetCursor({})
+    onClearQuery?.()
+  }, [onClearQuery])
 
   // Prefill filter from cell action menu
   const handlePrefillFilter = useCallback((field: string, operator: Operator, value: string) => {
@@ -620,13 +879,21 @@ export function DataTable({
   }, [tableIndexes])
 
   const restoreFromHistory = useCallback((entry: HistoryEntry) => {
+    const historyIndexFields = tableIndexes[entry.indexName]?.fields
+
     setSelectedIndex(entry.indexName)
     setConstraints(entry.constraints)
     setOrderDirection(entry.orderDirection)
     setQueryMethod(entry.queryMethod)
     setTakeCount(entry.takeCount)
+    setOffsetCursor(
+      normalizeOffsetCursorValues(
+        entry.offsetCursor,
+        historyIndexFields ? [...historyIndexFields] : [],
+      ),
+    )
     setActiveTab('filters')
-  }, [])
+  }, [tableIndexes])
 
   const removeFromHistory = useCallback((id: string) => {
     setHistory((prev) => {
@@ -644,9 +911,10 @@ export function DataTable({
   const activeFilterCount = useMemo(() => {
     let count = 0
     if (selectedIndex) count++
-    count += constraints.filter((c) => c.value.trim() !== '').length
+    count += constraints.filter(isConstraintActive).length
+    if (queryMethod === 'take' && hasOffsetCursor) count++
     return count
-  }, [selectedIndex, constraints])
+  }, [selectedIndex, constraints, queryMethod, hasOffsetCursor])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -659,7 +927,7 @@ export function DataTable({
           </span>
           {isFiltered && queryResult.executionTime !== undefined && (
             <span className="text-xs text-muted-foreground">
-              · {queryResult.executionTime.toFixed(2)}ms
+              · {queryResult.isLive ? 'live' : `${queryResult.executionTime.toFixed(2)}ms`}
             </span>
           )}
         </div>
@@ -697,6 +965,26 @@ export function DataTable({
           {isFiltered && (
             <Button variant="ghost" size="sm" onClick={handleClear} className="text-xs">
               Clear filter
+            </Button>
+          )}
+          {selectedRowKeys.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDeleteSelectedClick}
+              disabled={isDeleting}
+              className="border-red-500/40 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+              {isDeleting
+                ? 'Deleting...'
+                : `Delete ${selectedRowKeys.size === 1 ? '1 document' : `${selectedRowKeys.size} documents`}`}
             </Button>
           )}
           <Button size="sm" onClick={() => { setEditingCell(null); onAddRow() }}>
@@ -752,6 +1040,7 @@ export function DataTable({
                       setSelectedIndex(value === '_default' ? '' : value)
                       setConstraints([])
                       setQueryMethod('collect')
+                      setOffsetCursor({})
                     }}
                   >
                     <SelectTrigger className="h-8 flex-1 text-sm">
@@ -810,49 +1099,59 @@ export function DataTable({
                         + Add filter
                       </Button>
                     </div>
-                    {constraints.map((constraint, i) => (
-                      <div key={i} className="ml-[72px] flex items-center gap-2">
-                        <Select value={constraint.field} onValueChange={(value) => updateConstraint(i, { field: value })}>
-                          <SelectTrigger size="sm" className="h-7 w-28 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {indexFields.map((field) => (
-                              <SelectItem key={field} value={field}>{field}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
-                          <SelectTrigger size="sm" className="h-7 w-16 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="eq">=</SelectItem>
-                            <SelectItem value="gt">&gt;</SelectItem>
-                            <SelectItem value="gte">&gt;=</SelectItem>
-                            <SelectItem value="lt">&lt;</SelectItem>
-                            <SelectItem value="lte">&lt;=</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          value={constraint.value}
-                          onChange={(e) => updateConstraint(i, { value: e.target.value })}
-                          placeholder="value"
-                          className="h-7 flex-1 text-xs"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeConstraint(i)}
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 6 6 18" />
-                            <path d="m6 6 12 12" />
-                          </svg>
-                        </Button>
-                      </div>
-                    ))}
+                    {constraints.map((constraint, i) => {
+                      const operatorOptions = getOperatorOptionsForField(constraint.field)
+
+                      return (
+                        <div key={i} className="ml-[72px] flex items-center gap-2">
+                          <Select value={constraint.field} onValueChange={(value) => updateConstraint(i, { field: value })}>
+                            <SelectTrigger size="sm" className="h-7 w-28 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {indexFields.map((field) => (
+                                <SelectItem key={field} value={field}>{field}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Select value={constraint.operator} onValueChange={(value) => updateConstraint(i, { operator: value as Operator })}>
+                            <SelectTrigger size="sm" className="h-7 w-32 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {operatorOptions.map((operator) => (
+                                <SelectItem key={operator.value} value={operator.value}>
+                                  {operator.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {operatorNeedsValue(constraint.operator) ? (
+                            <Input
+                              value={constraint.value}
+                              onChange={(e) => updateConstraint(i, { value: e.target.value })}
+                              placeholder="value"
+                              className="h-7 flex-1 text-xs"
+                            />
+                          ) : (
+                            <div className="flex h-7 flex-1 items-center rounded-md border border-dashed border-input px-3 text-xs text-muted-foreground">
+                              No value needed
+                            </div>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeConstraint(i)}
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </svg>
+                          </Button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 
@@ -876,11 +1175,31 @@ export function DataTable({
                         type="number"
                         value={takeCount}
                         onChange={(e) => setTakeCount(e.target.value)}
-                        placeholder="10"
-                        className="h-8 w-16 text-sm"
+                        placeholder="Limit"
+                        className="h-8 w-20 text-sm"
                         min="1"
                       />
                     )}
+                  </div>
+                )}
+
+                {selectedIndex && queryMethod === 'take' && indexFields.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <label className="w-16 shrink-0 text-xs font-medium text-muted-foreground">After</label>
+                      <span className="text-xs text-muted-foreground">Start after this index key</span>
+                    </div>
+                    {indexFields.map((field) => (
+                      <div key={field} className="ml-[72px] flex items-center gap-2">
+                        <span className="w-24 shrink-0 text-xs font-medium">{field}</span>
+                        <Input
+                          value={offsetCursor[field] ?? ''}
+                          onChange={(e) => updateOffsetCursorField(field, e.target.value)}
+                          placeholder={`Cursor ${field}`}
+                          className="h-7 flex-1 text-xs"
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -888,10 +1207,16 @@ export function DataTable({
                 <div className="flex items-center gap-2 pt-2">
                   <Button
                     onClick={handleRun}
-                    disabled={isRunning || !collections || !selectedIndex || !isUniqueQueryValid}
+                    disabled={isRunning || !collections || !selectedIndex || !isUniqueQueryValid || hasPartialOffsetCursor}
                     size="sm"
                   >
-                    {isRunning ? 'Running...' : queryMethod === 'unique' && !isUniqueQueryValid ? 'Fill all fields' : 'Apply Filter'}
+                    {isRunning
+                      ? 'Running...'
+                      : queryMethod === 'unique' && !isUniqueQueryValid
+                        ? 'Fill all fields'
+                        : hasPartialOffsetCursor
+                          ? 'Fill cursor keys'
+                          : 'Apply Filter'}
                   </Button>
                   <Button variant="outline" size="sm" onClick={handleClear}>
                     Clear
@@ -1034,12 +1359,13 @@ export function DataTable({
             </TableHeader>
             <TableBody>
               {displayRows.map((row) => {
-                const rowId = row._id
-                const isRowSelected = selectedRowIds.has(rowId)
+                const rowId = getRowId(row)
+                const rowKey = getSerializedRowId(row)
+                const isRowSelected = selectedRowKeys.has(rowKey)
 
                 return (
                   <TableRow
-                    key={`${tableName}-${rowId}`}
+                    key={`${tableName}-${rowKey}`}
                     className={cn(
                       'group',
                       isRowSelected && 'bg-accent',
@@ -1049,14 +1375,14 @@ export function DataTable({
                     <TableCell className="w-10 px-3">
                       <Checkbox
                         checked={isRowSelected}
-                        onCheckedChange={() => toggleRowSelection(rowId)}
+                        onCheckedChange={() => toggleRowSelection(rowKey)}
                         onClick={(e) => e.stopPropagation()}
-                        aria-label={`Select row ${rowId}`}
+                        aria-label={`Select row ${rowKey}`}
                       />
                     </TableCell>
                     {columnNames.map((columnName) => (
                       <TableCell
-                        key={`${tableName}-${rowId}-${columnName}`}
+                        key={`${tableName}-${rowKey}-${columnName}`}
                         className="font-mono text-xs"
                         style={{
                           width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
@@ -1064,7 +1390,7 @@ export function DataTable({
                           maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
                         }}
                       >
-                        {editingCell?.rowId === rowId &&
+                        {editingCell?.rowKey === rowKey &&
                         editingCell.columnName === columnName ? (
                           isMultilineColumn(columnName) ||
                           isStructuredColumnType(columnInfoMap[columnName]?.type ?? '') ? (
@@ -1074,6 +1400,7 @@ export function DataTable({
                               onChange={(event) =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: event.target.value,
                                 })
@@ -1090,6 +1417,7 @@ export function DataTable({
                               onChange={(event) =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: event.target.value,
                                 })
@@ -1125,6 +1453,7 @@ export function DataTable({
                               onEdit={() =>
                                 setEditingCell({
                                   rowId,
+                                  rowKey,
                                   columnName,
                                   value: formatCellValue(getRowValue(row, columnName)),
                                 })

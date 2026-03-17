@@ -1,8 +1,12 @@
 import { useState, useCallback } from 'react'
 import type { SqliteReferenceColumn } from '@sink/lib'
-import { SCHEMA_VALIDATORS } from '@/data/generated/schema.gen'
+import { SCHEMA_VALIDATORS, type TableName } from '@/data/generated/schema.gen'
 import { cn } from '@/lib/utils'
-import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
+import {
+  formatSqliteDemoKey,
+  getSqliteDemoRowKey,
+  type SqliteDemoRow,
+} from '@/lib/sqlite-demo-collections'
 import { formatCellValue, getRowValue } from './utils'
 import {
   Tooltip,
@@ -164,10 +168,14 @@ export function DocumentPreviewPanel({
   // Single document view
   if (rows.length === 1) {
     const row = rows[0]!
+    const rowKeyLabel = formatSqliteDemoKey(
+      tableName as TableName,
+      getSqliteDemoRowKey(tableName as TableName, row),
+    )
     return (
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground mb-3">
-          Document <code className="rounded bg-muted px-1">{row._id}</code>
+          Document <code className="rounded bg-muted px-1">{rowKeyLabel}</code>
         </p>
         {columns.map((column) => {
           const value = getRowValue(row, column.name)

@@ -7,16 +7,20 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   createSqliteDemoCollectionsWorkspace,
+  getSqliteDemoRowKey,
+  serializeSqliteDemoKey,
   type SqliteDemoCollectionsWorkspace,
   type SqliteDemoId,
   type SqliteDemoRow,
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
 import type { SqliteReferenceColumn } from '@sink/lib'
-import { REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
+import { INDEXES, REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
+  buildOffsetCursorInput,
   CreateTableModal,
   DataTable,
+  DeleteRowsModal,
   InsertRowModal,
   type InsertModalState,
   parseValue,
@@ -32,6 +36,31 @@ export const Route = createFileRoute('/')({
   component: App,
 })
 
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+
+  if (typeof error === 'string') {
+    return error
+  }
+
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
 function App() {
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
@@ -45,9 +74,15 @@ function App() {
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
-  const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
+  const [activeQuery, setActiveQuery] = useState<QueryState | null>(null)
   const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<SqliteDemoId>>(new Set())
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
+  const [deleteModal, setDeleteModal] = useState<{
+    tableName: SqliteDemoTableName
+    count: number
+    keys: SqliteDemoId[]
+  } | null>(null)
+  const [isDeletingRows, setIsDeletingRows] = useState(false)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -81,7 +116,7 @@ function App() {
     loadDemo().catch((error: unknown) => {
       setSqliteState({
         status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown SQLite error',
+        error: formatUnknownError(error),
       })
     })
   }, [loadDemo])
@@ -109,8 +144,8 @@ function App() {
   )
 
   const selectedRowsQuery = useLiveQuery(
-    () => selectedCollection,
-    [selectedCollection],
+    () => selectedCollection as never,
+    [selectedCollection as never],
   )
 
   const tableRows = useMemo(
@@ -118,14 +153,124 @@ function App() {
     [selectedRowsQuery.data],
   )
 
+  const indexedRowsQuery = useLiveQuery(
+    (q) => {
+      if (!selectedCollection || !activeQuery) {
+        return undefined
+      }
+
+      const sqliteQuery = selectedCollection
+        .query()
+        .withIndex(activeQuery.indexName, (builder: any) => {
+          let nextBuilder = builder
+
+          for (const constraint of activeQuery.constraints) {
+            if (constraint.operator === 'isKnown' || constraint.operator === 'isUnknown') {
+              nextBuilder = nextBuilder[constraint.operator](constraint.field)
+              continue
+            }
+
+            nextBuilder = nextBuilder[constraint.operator](
+              constraint.field,
+              parseValue(constraint.value),
+            )
+          }
+
+          return nextBuilder
+        })
+        .order(activeQuery.orderDirection)
+
+      const activeTableIndexes =
+        selectedTable === undefined
+          ? {}
+          : (INDEXES[selectedTable.name as TableName] ?? {}) as Record<
+              string,
+              { fields: readonly string[] }
+            >
+
+      const offsetCursor =
+        activeQuery.queryMethod === 'take'
+          ? buildOffsetCursorInput(
+              [...(activeTableIndexes[activeQuery.indexName]?.fields ?? [])],
+              activeQuery.offsetCursor,
+            )
+          : null
+
+      if (offsetCursor !== null) {
+        sqliteQuery.offset(offsetCursor)
+      }
+
+      switch (activeQuery.queryMethod) {
+        case 'first':
+          return sqliteQuery.toLiveQuery(q, { single: true })
+        case 'unique':
+          return sqliteQuery.toLiveQuery(q, { limit: 2 })
+        case 'take':
+          return sqliteQuery.toLiveQuery(q, {
+            limit: parseInt(activeQuery.takeCount) || 10,
+          })
+        case 'collect':
+        default:
+          return sqliteQuery.toLiveQuery(q)
+      }
+    },
+    [activeQuery, selectedCollection, selectedTable?.name],
+  )
+
+  const queryResult = useMemo<QueryResult | null>(() => {
+    if (!activeQuery) {
+      return null
+    }
+
+    if (activeQuery.queryMethod === 'first') {
+      const row = indexedRowsQuery.data as SqliteDemoRow | undefined
+
+      return {
+        rows: row ? [row] : [],
+        executionTime: 0,
+        isLive: true,
+      }
+    }
+
+    const rows = (indexedRowsQuery.data ?? []) as SqliteDemoRow[]
+
+    if (activeQuery.queryMethod === 'unique') {
+      if (rows.length > 1) {
+        return {
+          rows: [],
+          executionTime: 0,
+          isLive: true,
+          error: 'Expected a unique result, but found multiple rows.',
+        }
+      }
+
+      return {
+        rows,
+        executionTime: 0,
+        isLive: true,
+      }
+    }
+
+    return {
+      rows,
+      executionTime: 0,
+      isLive: true,
+    }
+  }, [activeQuery, indexedRowsQuery.data])
+
   // Get the actual selected document objects from the IDs
   const selectedDocuments = useMemo(() => {
-    if (selectedRowIds.size === 0) return []
-    return tableRows.filter((row) => selectedRowIds.has(row._id))
-  }, [tableRows, selectedRowIds])
+    if (selectedRowKeys.size === 0 || selectedTable === undefined) return []
+    const tableName = selectedTable.name as SqliteDemoTableName
+    return tableRows.filter((row) =>
+      selectedRowKeys.has(
+        serializeSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row)),
+      ),
+    )
+  }, [selectedRowKeys, selectedTable, tableRows])
 
-  const handleSelectionChange = useCallback((ids: Set<SqliteDemoId>) => {
-    setSelectedRowIds(ids)
+  const handleSelectionChange = useCallback((rowKeys: Set<string>) => {
+    setSelectedRowKeys(new Set(rowKeys))
   }, [])
 
   // Get reference columns for the selected table
@@ -145,7 +290,9 @@ function App() {
 
   // Clear query result when table changes
   useEffect(() => {
-    setQueryResult(null)
+    setActiveQuery(null)
+    setSelectedRowKeys(new Set())
+    setDeleteModal(null)
   }, [selectedTableName])
 
   // Load indexes for selected table
@@ -183,11 +330,7 @@ function App() {
         await refreshSnapshot(workspace)
         setActionError(null)
       } catch (error) {
-        setActionError(
-          error instanceof Error
-            ? error.message
-            : 'Unable to update SQLite cell.',
-        )
+        setActionError(formatUnknownError(error))
       }
     },
     [refreshSnapshot, selectedTable, workspace],
@@ -196,31 +339,35 @@ function App() {
   const handleAddRow = useCallback(async () => {
     if (workspace === null || selectedTable === undefined) return
 
-    setActionError(null)
-    const tableName = selectedTable.name as SqliteDemoTableName
-    const transaction = workspace.createBatchTransaction({ autoCommit: false })
-    const draft = await workspace.createInsertDraft(tableName)
+    try {
+      setActionError(null)
+      const tableName = selectedTable.name as SqliteDemoTableName
+      const transaction = workspace.createBatchTransaction({ autoCommit: false })
+      const draft = await workspace.createInsertDraft(tableName)
 
-    // Pre-load reference rows for FK columns
-    const referenceRows: Record<string, SqliteDemoRow[]> = {}
-    const tableSnapshot = tables.find((t) => t.name === tableName)
-    if (tableSnapshot) {
-      for (const column of tableSnapshot.columns) {
-        const refCol = workspace.getReferenceColumn(tableName, column.name)
-        if (refCol) {
-          referenceRows[column.name] = await workspace.readRows(
-            refCol.referencedTable as SqliteDemoTableName,
-          )
+      // Pre-load reference rows for FK columns
+      const referenceRows: Record<string, SqliteDemoRow[]> = {}
+      const tableSnapshot = tables.find((t) => t.name === tableName)
+      if (tableSnapshot) {
+        for (const column of tableSnapshot.columns) {
+          const refCol = workspace.getReferenceColumn(tableName, column.name)
+          if (refCol) {
+            referenceRows[column.name] = await workspace.readRows(
+              refCol.referencedTable as SqliteDemoTableName,
+            )
+          }
         }
       }
-    }
 
-    setInsertModal({
-      tableName,
-      draft,
-      transaction,
-      referenceRows,
-    })
+      setInsertModal({
+        tableName,
+        draft,
+        transaction,
+        referenceRows,
+      })
+    } catch (error) {
+      setActionError(formatUnknownError(error))
+    }
   }, [selectedTable, tables, workspace])
 
   const handleInsertSubmit = useCallback(async () => {
@@ -237,9 +384,7 @@ function App() {
       setActionError(null)
       setInsertModal(null)
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Unable to insert SQLite row.',
-      )
+      setActionError(formatUnknownError(error))
       setInsertModal({
         tableName: insertModal.tableName,
         draft: insertModal.draft,
@@ -267,6 +412,55 @@ function App() {
     )
   }, [])
 
+  const handleDeleteSelected = useCallback(async (rowKeys: string[]) => {
+    if (selectedTable === undefined || rowKeys.length === 0) return
+
+    const tableName = selectedTable.name as SqliteDemoTableName
+    const keySet = new Set(rowKeys)
+    const rowsToDelete = tableRows.filter((row) =>
+      keySet.has(
+        serializeSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row)),
+      ),
+    )
+
+    if (rowsToDelete.length === 0) {
+      return
+    }
+
+    setDeleteModal({
+      tableName,
+      count: rowsToDelete.length,
+      keys: rowsToDelete.map((row) => getSqliteDemoRowKey(tableName, row)),
+    })
+  }, [selectedTable, tableRows])
+
+  const handleDeleteModalClose = useCallback(() => {
+    if (isDeletingRows) {
+      return
+    }
+
+    setDeleteModal(null)
+  }, [isDeletingRows])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (workspace === null || deleteModal === null) return
+
+    setIsDeletingRows(true)
+
+    try {
+      await workspace.deleteRows(deleteModal.tableName, deleteModal.keys)
+      await refreshSnapshot(workspace)
+      setActiveQuery(null)
+      setSelectedRowKeys(new Set())
+      setDeleteModal(null)
+      setActionError(null)
+    } catch (error) {
+      setActionError(formatUnknownError(error))
+    } finally {
+      setIsDeletingRows(false)
+    }
+  }, [deleteModal, refreshSnapshot, workspace])
+
   const persistenceBadgeVariant = workspace?.persistenceType === 'opfs'
     ? 'default'
     : workspace?.persistenceType === 'localStorage'
@@ -274,60 +468,12 @@ function App() {
       : 'outline'
 
   const handleRunQuery = useCallback(async (query: QueryState) => {
-    if (!workspace || !selectedTable) return
+    setActiveQuery(query)
+  }, [])
 
-    const startTime = performance.now()
-
-    try {
-      const collection = workspace.collections[selectedTable.name as SqliteDemoTableName] as unknown as SqliteCollection<SqliteDemoRow, SqliteDemoId>
-
-      // Build the query dynamically
-      let q = collection.query().withIndex(query.indexName, (builder: any) => {
-        let b = builder
-        for (const c of query.constraints) {
-          const value = parseValue(c.value)
-          b = b[c.operator](c.field, value)
-        }
-        return b
-      })
-
-      q = q.order(query.orderDirection)
-
-      let rows: SqliteDemoRow[]
-      switch (query.queryMethod) {
-        case 'first': {
-          const row = await q.first()
-          rows = row ? [row] : []
-          break
-        }
-        case 'unique': {
-          const row = await q.unique()
-          rows = row ? [row] : []
-          break
-        }
-        case 'take':
-          rows = await q.take(parseInt(query.takeCount) || 10)
-          break
-        case 'collect':
-        default:
-          rows = await q.collect()
-          break
-      }
-
-      const executionTime = performance.now() - startTime
-
-      setQueryResult({
-        rows,
-        executionTime,
-      })
-    } catch (err) {
-      setQueryResult({
-        rows: [],
-        executionTime: 0,
-        error: err instanceof Error ? err.message : 'Query failed',
-      })
-    }
-  }, [workspace, selectedTable])
+  const handleClearQuery = useCallback(() => {
+    setActiveQuery(null)
+  }, [])
 
 
   return (
@@ -402,8 +548,11 @@ function App() {
             queryResult={queryResult}
             onCellEdit={handleCellEdit}
             onAddRow={handleAddRow}
+            onDeleteSelected={handleDeleteSelected}
+            onClearQuery={handleClearQuery}
             onRunQuery={handleRunQuery}
             onSelectionChange={handleSelectionChange}
+            selectedRowKeys={selectedRowKeys}
           />
 
           {/* Right Sidebar - Schema/Indexes/Document */}
@@ -432,6 +581,20 @@ function App() {
       <CreateTableModal
         open={createTableModalOpen}
         onClose={() => setCreateTableModalOpen(false)}
+      />
+
+      <DeleteRowsModal
+        modal={
+          deleteModal
+            ? {
+                tableName: deleteModal.tableName,
+                count: deleteModal.count,
+              }
+            : null
+        }
+        isDeleting={isDeletingRows}
+        onClose={handleDeleteModalClose}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
     </HotkeysProvider>

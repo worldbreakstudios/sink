@@ -1,4 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import type { TableName } from '@/data/generated/schema.gen'
+import { serializeSqliteDemoKey, getSqliteDemoRowKey } from '@/lib/sqlite-demo-collections'
 import type { SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 import { formatReferenceOptionLabel } from './utils'
 
@@ -13,7 +15,7 @@ export function IndexedQueryPreview({
   tableName,
 }: {
   preview: IndexedQueryPreviewData
-  tableName: string
+  tableName: TableName
 }) {
   return (
     <Card>
@@ -29,8 +31,11 @@ export function IndexedQueryPreview({
         </pre>
         <div className="space-y-1 text-sm">
           {preview.rows.map((row) => (
-            <div key={row._id} className="rounded-md border px-3 py-2">
-              {formatReferenceOptionLabel(row)}
+            <div
+              key={serializeSqliteDemoKey(tableName, getSqliteDemoRowKey(tableName, row))}
+              className="rounded-md border px-3 py-2"
+            >
+              {formatReferenceOptionLabel(tableName, row)}
             </div>
           ))}
         </div>

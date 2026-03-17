@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
-type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
+type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'isKnown' | 'isUnknown'
 
 interface CellActionMenuProps {
   value: string
@@ -191,6 +191,13 @@ export function CellActionMenu({
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onFilter('lte', value)}>
                   Less than or equal
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onFilter('isKnown', '')}>
+                  Is known
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onFilter('isUnknown', '')}>
+                  Is unknown
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>

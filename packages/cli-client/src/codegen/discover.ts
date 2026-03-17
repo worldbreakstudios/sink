@@ -13,3 +13,11 @@ export function resolveOutputPath(cwd: string, out?: string): string {
   }
   return path.resolve(cwd, 'src/data/generated/schema.gen.ts')
 }
+
+export function resolveServerOutputPath(cwd: string, out?: string): string {
+  if (out) {
+    return path.resolve(cwd, out)
+  }
+
+  return path.resolve(cwd, 'src/data/generated/schema.server.gen.ts')
+}

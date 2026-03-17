@@ -12,8 +12,8 @@ export function CollectionCounter({
   collection: SqliteCollection<SqliteDemoRow, SqliteDemoId>
   onCount: (tableName: string, count: number) => void
 }) {
-  const query = useLiveQuery(() => collection, [collection])
-  const count = query.data?.length ?? 0
+  const typedQuery = useLiveQuery(() => collection as never, [collection as never])
+  const count = typedQuery.data?.length ?? 0
 
   useEffect(() => {
     onCount(tableName, count)

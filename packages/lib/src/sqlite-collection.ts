@@ -1,24 +1,49 @@
 import {
+  and,
   createCollection,
   createTransaction,
-  localOnlyCollectionOptions,
+  eq,
+  gt,
+  gte,
+  isNull,
+  isUndefined,
+  like as tanstackLike,
+  lt,
+  lte,
+  not,
+  or,
   type Collection,
+  type InitialQueryBuilder,
   type PendingMutation,
+  type QueryBuilder,
+  type SyncConfig,
   type Transaction,
   type TransactionConfig,
 } from "@tanstack/db";
+import type { SqlValue } from "@sqlite.org/sqlite-wasm";
 import type { LocalOnlyCollectionUtils } from "@tanstack/db";
-import type { AsyncSqliteDatabase } from "./sqlite";
+import {
+  appendSqliteMutationEventsToLog,
+  ensureSqliteSyncTables,
+} from "./sqlite-sync-core";
+import type { SqliteMutationOrigin } from "./sqlite-sync-core";
+import type {
+  AsyncSqliteDatabase,
+  SqliteCompositeKey,
+  SqliteKey,
+} from "./sqlite";
 
 export interface CreateSqliteCollectionOptions<
   TRow extends object,
-  TKey extends string | number,
+  TKey,
   TIndexes extends SqliteIndexMap = Record<string, never>,
 > {
   id: string;
   tableName: string;
-  keyColumn: keyof TRow & string;
+  keyColumns: ReadonlyArray<keyof TRow & string>;
   getKey: (row: TRow) => TKey;
+  serializeKey: (key: TKey) => string | number;
+  deserializeKey: (key: string | number) => TKey;
   database: AsyncSqliteDatabase;
   referenceColumns?: Partial<
     Record<keyof TRow & string, SqliteReferenceColumn>
@@ -29,6 +54,8 @@ export interface CreateSqliteCollectionOptions<
 export interface SqliteReferenceColumn {
   referencedTable: string;
   enforceExists: boolean;
+  keyColumns: readonly string[];
+  actorScoped: boolean;
 }
 
 export interface SqliteIndexDefinition<
@@ -53,15 +80,23 @@ export interface SqliteCollectionUtils<
   createSqliteTransaction(
     config?: Omit<TransactionConfig<TRow>, "mutationFn">,
   ): Transaction<TRow>;
+  dispose(): void;
 }
 
 export type SqliteCollection<
   TRow extends object,
-  TKey extends string | number,
+  TKey,
   TIndexes extends SqliteIndexMap = Record<string, never>,
-> = Collection<TRow, TKey, SqliteCollectionUtils<TRow>> & {
+> = Omit<
+  Collection<TRow, string | number, SqliteCollectionUtils<TRow>>,
+  "update" | "delete"
+> & {
+  update(key: TKey, updater: (draft: TRow) => void): void;
+  delete(key: TKey): void;
   query(): SqliteQueryInitializer<TRow, TIndexes>;
 };
+
+export type SqliteRowKey = SqliteKey;
 
 type ChannelEventListener<TEvent> = (event: TEvent) => void;
 
@@ -79,17 +114,28 @@ export interface SqliteMutationChange {
 }
 
 export interface SqliteMutationRowDiff {
-  key: string | number | null;
+  key: SqliteRowKey | null;
   changeType: "inserted" | "updated" | "deleted" | "unchanged";
   changes: Record<string, SqliteMutationChange>;
+  beforeRow: Record<string, unknown> | null;
+  afterRow: Record<string, unknown> | null;
 }
 
 export interface SqliteMutationEvent {
+  eventId: string;
+  origin: SqliteMutationOrigin;
   tableName: string;
+  sourceInstanceId: string;
   mutationType: PendingMutation<Record<string, unknown>>["type"];
-  keyColumn: string;
+  keyColumns: readonly string[];
   rowDiffs: SqliteMutationRowDiff[];
   publishedAt: number;
+  serverSequence: number | null;
+}
+
+export interface SqliteLiveQueryOptions {
+  limit?: number;
+  single?: boolean;
 }
 
 function createChannelEventBus<TEvent>(): ChannelEventBus<TEvent> {
@@ -195,6 +241,16 @@ export interface SqliteIndexRangeBuilder<
     field: TField,
     value: IndexFieldValue<TRow, TField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, true, false>;
+  like<TField extends Head<TFields>>(
+    field: TField,
+    value: IndexFieldValue<TRow, TField>,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
+  isKnown<TField extends Head<TFields>>(
+    field: TField,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
+  isUnknown<TField extends Head<TFields>>(
+    field: TField,
+  ): SqliteIndexRangeBuilder<TRow, Tail<TFields>>;
 }
 
 export interface SqliteBoundIndexRangeBuilder<
@@ -219,6 +275,16 @@ export interface SqliteBoundIndexRangeBuilder<
     field: TNextField,
     value: IndexFieldValue<TRow, TNextField>,
   ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, true>;
+  like<TNextField extends TField>(
+    field: TNextField,
+    value: IndexFieldValue<TRow, TNextField>,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
+  isKnown<TNextField extends TField>(
+    field: TNextField,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
+  isUnknown<TNextField extends TField>(
+    field: TNextField,
+  ): SqliteBoundIndexRangeBuilder<TRow, TField, THasLower, THasUpper>;
 }
 
 /**
@@ -226,8 +292,8 @@ export interface SqliteBoundIndexRangeBuilder<
  *
  * Queries default to using the `by_id` index if no index is specified:
  * ```ts
- * collection.query().collect()           // All rows, ordered by _id ASC
- * collection.query().order('desc').take(10)  // Last 10 by _id
+ * collection.query().collect()           // All rows, ordered by primary key ASC
+ * collection.query().order('desc').take(10)  // Last 10 by primary key
  * ```
  *
  * Use `.withIndex()` for queries on other indexes:
@@ -260,25 +326,40 @@ export interface SqliteQuery<
   order(direction: "asc" | "desc"): SqliteQuery<TRow, TIndexes>;
 
   /**
-   * Execute the query and return all matching rows.
+   * Start the result window strictly after the provided index key.
+   * For multi-field indexes, pass an object keyed by the indexed fields.
+   */
+  offset(cursor: unknown): SqliteQuery<TRow, TIndexes>;
+
+  /**
+   * Execute the query and return all matching rows after the offset key.
    */
   collect(): Promise<TRow[]>;
 
   /**
-   * Execute the query and return the first matching row, or null.
+   * Execute the query and return the first matching row after the offset key,
+   * or null.
    */
   first(): Promise<TRow | null>;
 
   /**
-   * Execute the query and return the single matching row.
+   * Execute the query and return the single matching row after the offset key.
    * Throws if more than one row matches.
    */
   unique(): Promise<TRow | null>;
 
   /**
-   * Execute the query and return up to `limit` rows.
+   * Execute the query and return up to `limit` rows after the offset key.
    */
   take(limit: number): Promise<TRow[]>;
+
+  /**
+   * Build a TanStack DB query that can be passed to `useLiveQuery`.
+   */
+  toLiveQuery(
+    query: InitialQueryBuilder,
+    options?: SqliteLiveQueryOptions,
+  ): QueryBuilder<any>;
 }
 
 // Keep old interface names as aliases for backwards compatibility
@@ -429,9 +510,269 @@ function deserializeRowValues<TRow extends object>(
   ) as TRow;
 }
 
+function normalizeRowKey(
+  key: SqliteRowKey,
+  keyColumns: readonly string[],
+): SqliteRowKey {
+  if (keyColumns.length === 1 && !isPlainObject(key)) {
+    return key;
+  }
+
+  if (!isPlainObject(key)) {
+    throw new Error(
+      `Expected an object key with columns ${keyColumns.join(", ")}.`,
+    );
+  }
+
+  const normalizedKey: SqliteCompositeKey = {};
+
+  for (const columnName of keyColumns) {
+    const value = key[columnName];
+
+    if (value === undefined) {
+      throw new Error(`Missing key column "${columnName}".`);
+    }
+
+    normalizedKey[columnName] = value as never;
+  }
+
+  return normalizedKey;
+}
+
+function getRowKeyFromRow(
+  row: Record<string, unknown>,
+  keyColumns: readonly string[],
+): SqliteRowKey {
+  if (keyColumns.length === 1) {
+    const keyColumn = keyColumns[0];
+
+    if (!keyColumn) {
+      throw new Error("Missing key column.");
+    }
+
+    return row[keyColumn] as SqliteRowKey;
+  }
+
+  return Object.fromEntries(
+    keyColumns.map((columnName) => [columnName, row[columnName]]),
+  ) as SqliteCompositeKey;
+}
+
+function buildKeyPredicate(
+  key: SqliteRowKey,
+  keyColumns: readonly string[],
+): { whereClause: string; bind: SqlValue[] } {
+  const normalizedKey = normalizeRowKey(key, keyColumns);
+
+  if (keyColumns.length === 1 && !isPlainObject(normalizedKey)) {
+    const keyColumn = keyColumns[0];
+
+    if (!keyColumn) {
+      throw new Error("Missing key column.");
+    }
+
+    return {
+      whereClause: `WHERE "${escapeIdentifier(keyColumn)}" = ?`,
+      bind: [normalizedKey as SqlValue],
+    };
+  }
+
+  return {
+    whereClause: `WHERE ${keyColumns
+      .map((columnName) => `"${escapeIdentifier(columnName)}" = ?`)
+      .join(" AND ")}`,
+    bind: keyColumns.map(
+      (columnName) =>
+        (normalizedKey as Record<string, unknown>)[columnName] as SqlValue,
+    ),
+  };
+}
+
+function buildOrderByClause(keyColumns: readonly string[]): string {
+  return keyColumns
+    .map((columnName) => `"${escapeIdentifier(columnName)}" ASC`)
+    .join(", ");
+}
+
+type SqliteSyncMessage<TRow extends object> =
+  | {
+      type: "insert" | "update";
+      key: string | number;
+      value: TRow;
+      previousValue?: TRow;
+    }
+  | {
+      type: "delete";
+      key: string | number;
+    };
+
+interface SqliteSyncController<TRow extends object> {
+  sync: SyncConfig<TRow, string | number>;
+  confirmMutations(mutations: Array<PendingMutation<TRow>>): void;
+  applyMutationEvent(event: SqliteMutationEvent): void;
+}
+
+function createSqliteSyncController<TRow extends object, TKey>(params: {
+  initialData: TRow[];
+  getSerializedRowKey: (row: TRow) => string | number;
+  serializeKey: (key: TKey) => string | number;
+}): SqliteSyncController<TRow> {
+  const syncedRows = new Map<string | number, TRow>(
+    params.initialData.map((row) => [params.getSerializedRowKey(row), row]),
+  );
+  let syncBegin:
+    | ((options?: { immediate?: boolean }) => void)
+    | null = null;
+  let syncWrite: ((message: SqliteSyncMessage<TRow>) => void) | null = null;
+  let syncCommit: (() => void) | null = null;
+
+  const writeMessages = (messages: SqliteSyncMessage<TRow>[]) => {
+    if (!syncBegin || !syncWrite || !syncCommit || messages.length === 0) {
+      return;
+    }
+
+    syncBegin();
+
+    for (const message of messages) {
+      syncWrite(message);
+    }
+
+    syncCommit();
+  };
+
+  return {
+    sync: {
+      rowUpdateMode: "full",
+      sync: ({ begin, write, commit, markReady }) => {
+        syncBegin = begin;
+        syncWrite = write as (message: SqliteSyncMessage<TRow>) => void;
+        syncCommit = commit;
+
+        const initialMessages = Array.from(
+          syncedRows.entries(),
+          ([key, value]) =>
+            ({
+              type: "insert",
+              key,
+              value,
+            }) as const,
+        );
+
+        writeMessages(initialMessages);
+        markReady();
+
+        return () => {
+          syncBegin = null;
+          syncWrite = null;
+          syncCommit = null;
+        };
+      },
+      getSyncMetadata: () => ({}),
+    },
+    confirmMutations(mutations) {
+      const messages: SqliteSyncMessage<TRow>[] = [];
+
+      for (const mutation of mutations) {
+        const serializedKey = mutation.key as string | number;
+
+        switch (mutation.type) {
+          case "insert":
+            syncedRows.set(serializedKey, mutation.modified);
+            messages.push({
+              type: "insert",
+              key: serializedKey,
+              value: mutation.modified,
+            });
+            break;
+          case "update":
+            syncedRows.set(serializedKey, mutation.modified);
+            messages.push({
+              type: "update",
+              key: serializedKey,
+              value: mutation.modified,
+              previousValue: mutation.original as TRow,
+            });
+            break;
+          case "delete":
+            syncedRows.delete(serializedKey);
+            messages.push({
+              type: "delete",
+              key: serializedKey,
+            });
+            break;
+        }
+      }
+
+      writeMessages(messages);
+    },
+    applyMutationEvent(event) {
+      const messages: SqliteSyncMessage<TRow>[] = [];
+
+      for (const rowDiff of event.rowDiffs) {
+        switch (rowDiff.changeType) {
+          case "inserted": {
+            if (!rowDiff.afterRow) {
+              continue;
+            }
+
+            const nextRow = rowDiff.afterRow as TRow;
+            const serializedKey = params.getSerializedRowKey(nextRow);
+            syncedRows.set(serializedKey, nextRow);
+            messages.push({
+              type: "insert",
+              key: serializedKey,
+              value: nextRow,
+            });
+            break;
+          }
+          case "updated": {
+            if (!rowDiff.afterRow) {
+              continue;
+            }
+
+            const nextRow = rowDiff.afterRow as TRow;
+            const serializedKey = params.getSerializedRowKey(nextRow);
+            syncedRows.set(serializedKey, nextRow);
+            messages.push({
+              type: "update",
+              key: serializedKey,
+              value: nextRow,
+              previousValue: rowDiff.beforeRow
+                ? (rowDiff.beforeRow as TRow)
+                : undefined,
+            });
+            break;
+          }
+          case "deleted": {
+            const serializedKey =
+              rowDiff.key === null
+                ? null
+                : params.serializeKey(rowDiff.key as TKey);
+
+            if (serializedKey === null) {
+              continue;
+            }
+
+            syncedRows.delete(serializedKey);
+            messages.push({
+              type: "delete",
+              key: serializedKey,
+            });
+            break;
+          }
+          case "unchanged":
+            break;
+        }
+      }
+
+      writeMessages(messages);
+    },
+  };
+}
+
 export async function createSqliteCollection<
   TRow extends object,
-  TKey extends string | number,
+  TKey,
   TIndexes extends SqliteIndexMap = Record<string, never>,
 >(
   options: CreateSqliteCollectionOptions<TRow, TKey, TIndexes>,
@@ -443,30 +784,56 @@ export async function createSqliteCollection<
   const columnNames = new Set(tableColumns.map((column) => column.name));
   const structuredColumns = getStructuredColumns(tableColumns);
 
-  // Load initial data asynchronously (ordered by _id)
+  // Load initial data asynchronously in primary-key order.
   const initialData = await readAllRows<TRow>(
     options.database,
     options.tableName,
     structuredColumns,
+    options.keyColumns,
   );
-
-  const baseOptions = localOnlyCollectionOptions<TRow, TKey>({
-    id: options.id,
-    getKey: options.getKey,
-    initialData,
-  });
-
+  const sourceInstanceId = crypto.randomUUID();
   let collection!: SqliteCollection<TRow, TKey, TIndexes>;
+  let disposeMutationSubscription = () => {};
+  let baseCollection!: Collection<
+    TRow,
+    string | number,
+    SqliteCollectionUtils<TRow>
+  >;
 
   const readAll = () =>
-    readAllRows<TRow>(options.database, options.tableName, structuredColumns);
+    readAllRows<TRow>(
+      options.database,
+      options.tableName,
+      structuredColumns,
+      options.keyColumns,
+    );
+
+  const syncController = createSqliteSyncController<TRow, TKey>({
+    initialData,
+    getSerializedRowKey: (row) => options.serializeKey(options.getKey(row)),
+    serializeKey: options.serializeKey,
+  });
+
+  const acceptMutations: SqliteCollectionUtils<TRow>["acceptMutations"] = (
+    transaction,
+  ) => {
+    const relevantMutations = transaction.mutations.filter(
+      (mutation) => mutation.collection === baseCollection,
+    ) as Array<PendingMutation<TRow>>;
+
+    if (relevantMutations.length === 0) {
+      return;
+    }
+
+    syncController.confirmMutations(relevantMutations);
+  };
 
   const persistMutations = async (transaction: {
     mutations: Array<PendingMutation<any>>;
   }) => {
     const relevantMutations = transaction.mutations.filter(
       (mutation): mutation is PendingMutation<TRow> =>
-        mutation.collection === collection,
+        mutation.collection === baseCollection,
     );
 
     if (relevantMutations.length === 0) {
@@ -474,16 +841,13 @@ export async function createSqliteCollection<
     }
 
     const mutationEvents = await persistSqliteMutations(
-      options as unknown as CreateSqliteCollectionOptions<
-        TRow,
-        string | number,
-        SqliteIndexMap
-      >,
+      options,
       relevantMutations,
       columnNames,
       structuredColumns,
+      sourceInstanceId,
     );
-    baseOptions.utils.acceptMutations({
+    acceptMutations({
       mutations: relevantMutations as Array<
         PendingMutation<Record<string, unknown>>
       >,
@@ -504,24 +868,83 @@ export async function createSqliteCollection<
       },
     });
 
-  collection = createCollection({
-    ...baseOptions,
+  baseCollection = createCollection({
     id: options.id,
-    getKey: options.getKey,
+    getKey: (row) => options.serializeKey(options.getKey(row)),
+    sync: syncController.sync,
+    startSync: true,
+    gcTime: 0,
+    onInsert: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
+    onUpdate: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
+    onDelete: async ({ transaction }) => {
+      await persistMutations(transaction);
+    },
     utils: {
-      ...baseOptions.utils,
+      acceptMutations,
       readAll,
       persistMutations,
       createSqliteTransaction,
+      dispose() {
+        disposeMutationSubscription();
+      },
     },
-  }) as unknown as SqliteCollection<TRow, TKey, TIndexes>;
+  });
+
+  disposeMutationSubscription = subscribeToSqliteMutationEvents(
+    options.tableName,
+    (event) => {
+      if (event.sourceInstanceId === sourceInstanceId) {
+        return;
+      }
+
+      syncController.applyMutationEvent(event);
+    },
+  );
+
+  collection = baseCollection as unknown as SqliteCollection<
+    TRow,
+    TKey,
+    TIndexes
+  >;
+  const baseUpdate = baseCollection.update.bind(baseCollection) as (
+    key: string | number,
+    updater: (draft: TRow) => void,
+  ) => void;
+  const baseDelete = baseCollection.delete.bind(baseCollection) as (
+    key: string | number,
+  ) => void;
+
+  collection.update = ((key, updater) =>
+    baseUpdate(
+      options.serializeKey(key),
+      updater,
+    )) as SqliteCollection<
+    TRow,
+    TKey,
+    TIndexes
+  >["update"];
+
+  collection.delete = ((key) =>
+    baseDelete(
+      options.serializeKey(key),
+    )) as SqliteCollection<
+    TRow,
+    TKey,
+    TIndexes
+  >["delete"];
 
   collection.query = () =>
     createSqliteQuery<TRow, TIndexes>(
+      baseCollection,
       options.database,
       options.tableName,
       options.indexes ?? ({} as TIndexes),
       structuredColumns,
+      options.keyColumns,
     );
 
   return collection;
@@ -531,18 +954,280 @@ async function readAllRows<TRow extends object>(
   database: AsyncSqliteDatabase,
   tableName: string,
   structuredColumns: StructuredColumns,
+  keyColumns: readonly string[],
 ): Promise<TRow[]> {
   const rows = await database.query<Record<string, unknown>>(
-    `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY "_id" ASC;`,
+    `SELECT * FROM "${escapeIdentifier(tableName)}" ORDER BY ${buildOrderByClause(keyColumns)};`,
   );
 
   return rows.map((row) => deserializeRowValues<TRow>(row, structuredColumns));
+}
+
+function getFieldPathRef(
+  row: Record<string, unknown>,
+  fieldPath: string,
+): unknown {
+  return fieldPath
+    .split(".")
+    .reduce<unknown>((value, segment) => (value as Record<string, unknown>)?.[
+      segment
+    ], row);
+}
+
+function combineLiveExpressions(expressions: unknown[]): unknown | null {
+  if (expressions.length === 0) {
+    return null;
+  }
+
+  if (expressions.length === 1) {
+    return expressions[0] ?? null;
+  }
+
+  const [first, second, ...rest] = expressions;
+
+  if (!first || !second) {
+    return first ?? second ?? null;
+  }
+
+  return and(first as never, second as never, ...(rest as never[]));
+}
+
+function combineLiveOrExpressions(expressions: unknown[]): unknown | null {
+  if (expressions.length === 0) {
+    return null;
+  }
+
+  if (expressions.length === 1) {
+    return expressions[0] ?? null;
+  }
+
+  const [first, second, ...rest] = expressions;
+
+  if (!first || !second) {
+    return first ?? second ?? null;
+  }
+
+  return or(first as never, second as never, ...(rest as never[]));
+}
+
+function buildLiveRangeExpression(
+  row: Record<string, unknown>,
+  range: SqliteQueryRangeState,
+): unknown | null {
+  const expressions: unknown[] = [];
+
+  for (const equality of range.equals) {
+    expressions.push(eq(getFieldPathRef(row, equality.field) as never, equality.value));
+  }
+
+  for (const likeMatch of range.likes) {
+    expressions.push(
+      tanstackLike(
+        getFieldPathRef(row, likeMatch.field) as never,
+        likeMatch.value as never,
+      ),
+    );
+  }
+
+  for (const nullCheck of range.nullChecks) {
+    const fieldRef = getFieldPathRef(row, nullCheck.field) as never;
+    const unknownValueExpression = or(
+      isNull(fieldRef),
+      isUndefined(fieldRef),
+    );
+
+    expressions.push(
+      nullCheck.operator === "IS NULL"
+        ? unknownValueExpression
+        : not(unknownValueExpression),
+    );
+  }
+
+  if (range.lowerBound) {
+    const fieldRef = getFieldPathRef(row, range.lowerBound.field) as never;
+
+    expressions.push(
+      range.lowerBound.operator === ">"
+        ? gt(fieldRef, range.lowerBound.value as never)
+        : gte(fieldRef, range.lowerBound.value as never),
+    );
+  }
+
+  if (range.upperBound) {
+    const fieldRef = getFieldPathRef(row, range.upperBound.field) as never;
+
+    expressions.push(
+      range.upperBound.operator === "<"
+        ? lt(fieldRef, range.upperBound.value as never)
+        : lte(fieldRef, range.upperBound.value as never),
+    );
+  }
+
+  return combineLiveExpressions(expressions);
+}
+
+function buildLiveCursorExpression(
+  row: Record<string, unknown>,
+  indexFields: readonly string[],
+  cursorValues: Record<string, unknown> | null,
+  direction: "asc" | "desc",
+): unknown | null {
+  if (!cursorValues || indexFields.length === 0) {
+    return null;
+  }
+
+  const comparisonOperator = direction === "asc" ? gt : lt;
+  const cursorBranches: unknown[] = [];
+
+  for (let fieldIndex = 0; fieldIndex < indexFields.length; fieldIndex += 1) {
+    const field = indexFields[fieldIndex];
+
+    if (!field) {
+      continue;
+    }
+
+    const branchExpressions: unknown[] = [];
+
+    for (let prefixIndex = 0; prefixIndex < fieldIndex; prefixIndex += 1) {
+      const prefixField = indexFields[prefixIndex];
+
+      if (!prefixField) {
+        continue;
+      }
+
+      branchExpressions.push(
+        eq(
+          getFieldPathRef(row, prefixField) as never,
+          cursorValues[prefixField] as never,
+        ),
+      );
+    }
+
+    branchExpressions.push(
+      comparisonOperator(
+        getFieldPathRef(row, field) as never,
+        cursorValues[field] as never,
+      ),
+    );
+
+    cursorBranches.push(combineLiveExpressions(branchExpressions));
+  }
+
+  return combineLiveOrExpressions(cursorBranches);
+}
+
+function createTanStackLiveQuery<TRow extends object>(
+  query: InitialQueryBuilder,
+  sourceCollection: Collection<TRow, string | number, SqliteCollectionUtils<TRow>>,
+  range: SqliteQueryRangeState,
+  indexFields: readonly string[],
+  cursorValues: Record<string, unknown> | null,
+  direction: "asc" | "desc",
+  options?: SqliteLiveQueryOptions,
+): QueryBuilder<any> {
+  let liveQuery = query.from({ row: sourceCollection });
+
+  const liveLimit = options?.limit ?? (options?.single ? 1 : undefined);
+
+  if (
+    range.equals.length > 0 ||
+    range.likes.length > 0 ||
+    range.nullChecks.length > 0 ||
+    range.lowerBound !== null ||
+    range.upperBound !== null ||
+    cursorValues !== null
+  ) {
+    liveQuery = liveQuery.where(({ row }) => {
+      const expression = combineLiveExpressions([
+        buildLiveRangeExpression(
+          row as unknown as Record<string, unknown>,
+          range,
+        ),
+        buildLiveCursorExpression(
+          row as unknown as Record<string, unknown>,
+          indexFields,
+          cursorValues,
+          direction,
+        ),
+      ]);
+
+      if (!expression) {
+        throw new Error("Expected a live query filter expression.");
+      }
+
+      return expression as never;
+    }) as typeof liveQuery;
+  }
+
+  for (const field of indexFields) {
+    liveQuery = liveQuery.orderBy(
+      ({ row }) =>
+        getFieldPathRef(row as unknown as Record<string, unknown>, field) as never,
+      direction,
+    ) as typeof liveQuery;
+  }
+
+  liveQuery = liveQuery.select(({ row }) => ({ ...row }) as never) as typeof liveQuery;
+
+  if (liveLimit !== undefined) {
+    liveQuery = liveQuery.limit(liveLimit) as typeof liveQuery;
+  }
+
+  if (options?.single) {
+    return liveQuery.findOne();
+  }
+
+  return liveQuery;
+}
+
+function normalizeIndexCursor(
+  cursor: unknown,
+  indexFields: readonly string[],
+): Record<string, unknown> {
+  if (indexFields.length === 0) {
+    throw new Error("Cannot offset a query without index fields.");
+  }
+
+  if (indexFields.length === 1) {
+    const field = indexFields[0];
+
+    if (!field) {
+      throw new Error("Missing index field.");
+    }
+
+    if (isPlainObject(cursor) && field in cursor) {
+      return { [field]: cursor[field] };
+    }
+
+    return { [field]: cursor };
+  }
+
+  if (!isPlainObject(cursor)) {
+    throw new Error(
+      `Composite index offsets must be objects with fields: ${indexFields.join(", ")}.`,
+    );
+  }
+
+  return Object.fromEntries(
+    indexFields.map((field) => {
+      if (!(field in cursor)) {
+        throw new Error(`Missing offset field "${field}".`);
+      }
+
+      return [field, cursor[field]];
+    }),
+  );
 }
 
 function createSqliteQuery<
   TRow extends object,
   TIndexes extends SqliteIndexMap,
 >(
+  sourceCollection: Collection<
+    TRow,
+    string | number,
+    SqliteCollectionUtils<TRow>
+  >,
   database: AsyncSqliteDatabase,
   tableName: string,
   indexes: TIndexes,
@@ -550,19 +1235,25 @@ function createSqliteQuery<
   initialIndexFields: readonly string[] = ["_id"],
   initialRange: SqliteQueryRangeState = {
     equals: [],
+    likes: [],
+    nullChecks: [],
     lowerBound: null,
     upperBound: null,
   },
 ): SqliteQuery<TRow, TIndexes> {
   let indexFields = initialIndexFields;
   let range = initialRange;
+  let cursorInput: unknown | null = null;
   let direction: "asc" | "desc" = "asc";
 
   const run = async (limit?: number): Promise<TRow[]> => {
+    const cursorValues =
+      cursorInput === null ? null : normalizeIndexCursor(cursorInput, indexFields);
     const { sql, bind } = buildIndexedSelectSql(
       tableName,
       indexFields,
       range,
+      cursorValues,
       direction,
       structuredColumns,
       limit,
@@ -605,6 +1296,10 @@ function createSqliteQuery<
       direction = nextDirection;
       return this;
     },
+    offset(cursor) {
+      cursorInput = cursor;
+      return this;
+    },
     async collect() {
       return run();
     },
@@ -624,26 +1319,46 @@ function createSqliteQuery<
     async take(limit) {
       return run(limit);
     },
+    toLiveQuery(query, options) {
+      return createTanStackLiveQuery(
+        query,
+        sourceCollection,
+        range,
+        indexFields,
+        cursorInput === null ? null : normalizeIndexCursor(cursorInput, indexFields),
+        direction,
+        options,
+      );
+    },
   };
 }
 
 async function persistSqliteMutations<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   mutations: Array<PendingMutation<TRow>>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
+  sourceInstanceId: string,
 ): Promise<SqliteMutationEvent[]> {
   const mutationEvents: SqliteMutationEvent[] = [];
 
+  await ensureSqliteSyncTables(options.database);
   await options.database.execute("BEGIN");
 
   try {
     for (const mutation of mutations) {
       mutationEvents.push(
-        await applyMutation(options, mutation, columnNames, structuredColumns),
+        await applyMutation(
+          options,
+          mutation,
+          columnNames,
+          structuredColumns,
+          sourceInstanceId,
+        ),
       );
     }
 
+    await appendSqliteMutationEventsToLog(options.database, mutationEvents);
     await options.database.execute("COMMIT");
     return mutationEvents;
   } catch (error) {
@@ -657,13 +1372,29 @@ async function persistSqliteMutations<TRow extends object>(
   }
 }
 
+function deserializeMutationKey<TRow extends object, TKey>(
+  options: CreateSqliteCollectionOptions<TRow, TKey, SqliteIndexMap>,
+  mutationKey: unknown,
+): TKey {
+  if (typeof mutationKey === "string" || typeof mutationKey === "number") {
+    return options.deserializeKey(mutationKey);
+  }
+
+  return mutationKey as TKey;
+}
+
 async function applyMutation<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
+  sourceInstanceId: string,
 ): Promise<SqliteMutationEvent> {
-  const snapshotQuery = buildMutationSnapshotQuery(options, mutation.key);
+  const mutationKey = deserializeMutationKey(
+    options,
+    mutation.key,
+  ) as SqliteRowKey;
+  const snapshotQuery = buildMutationSnapshotQuery(options, mutationKey);
   const beforeRows = await queryMutationRows(
     options.database,
     snapshotQuery,
@@ -680,10 +1411,17 @@ async function applyMutation<TRow extends object>(
       );
       break;
     case "update":
-      await updateRow(options, mutation, columnNames, structuredColumns);
+      await updateRow(
+        options,
+        mutation,
+        columnNames,
+        structuredColumns,
+        beforeRows[0],
+        mutationKey,
+      );
       break;
     case "delete":
-      await deleteRow(options, mutation.key);
+      await deleteRow(options, mutationKey);
       break;
   }
 
@@ -697,25 +1435,26 @@ async function applyMutation<TRow extends object>(
     mutation,
     beforeRows,
     afterRows,
+    mutationKey,
+    sourceInstanceId,
   );
 }
 
 interface MutationSnapshotQuery {
   sql: string;
-  bind: Array<string | number>;
+  bind: SqlValue[];
 }
 
 function buildMutationSnapshotQuery<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
-  key: string | number,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
+  key: SqliteRowKey,
 ): MutationSnapshotQuery {
   const escapedTableName = escapeIdentifier(options.tableName);
-  const escapedKeyColumn = escapeIdentifier(options.keyColumn);
-  const whereClause = `WHERE "${escapedKeyColumn}" = ?`;
+  const predicate = buildKeyPredicate(key, options.keyColumns);
 
   return {
-    sql: `SELECT * FROM "${escapedTableName}" ${whereClause} ORDER BY "${escapedKeyColumn}" ASC;`,
-    bind: [key],
+    sql: `SELECT * FROM "${escapedTableName}" ${predicate.whereClause} ORDER BY ${buildOrderByClause(options.keyColumns)};`,
+    bind: predicate.bind,
   };
 }
 
@@ -733,37 +1472,42 @@ async function queryMutationRows(
 }
 
 function createMutationEvent<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
+  mutationKey: SqliteRowKey,
+  sourceInstanceId: string,
 ): SqliteMutationEvent {
   const rowDiffs = buildMutationRowDiffs(
     beforeRows,
     afterRows,
-    options.keyColumn,
-    mutation.key,
+    options.keyColumns,
+    mutationKey,
   );
 
   return {
+    eventId: crypto.randomUUID(),
+    origin: "local",
     tableName: options.tableName,
+    sourceInstanceId,
     mutationType: mutation.type,
-    keyColumn: options.keyColumn,
+    keyColumns: [...options.keyColumns],
     rowDiffs,
     publishedAt: Date.now(),
+    serverSequence: null,
   };
 }
 
 function logMutationDiff(event: SqliteMutationEvent): void {
-  console.log(event);
   sqliteMutationEventBus.publish(event.tableName, event);
 }
 
 function buildMutationRowDiffs(
   beforeRows: Array<Record<string, unknown>>,
   afterRows: Array<Record<string, unknown>>,
-  keyColumn: string,
-  fallbackKey: string | number,
+  keyColumns: readonly string[],
+  fallbackKey: SqliteRowKey,
 ): SqliteMutationRowDiff[] {
   const rowCount = Math.max(beforeRows.length, afterRows.length);
   const diffs: SqliteMutationRowDiff[] = [];
@@ -774,16 +1518,18 @@ function buildMutationRowDiffs(
     const changes = diffRowValues(beforeRow, afterRow);
 
     diffs.push({
-      key: resolveMutationRowKey(beforeRow, afterRow, keyColumn, fallbackKey),
+      key: resolveMutationRowKey(beforeRow, afterRow, keyColumns, fallbackKey),
       changeType:
         beforeRow === undefined
           ? "inserted"
           : afterRow === undefined
             ? "deleted"
             : Object.keys(changes).length === 0
-              ? "unchanged"
+            ? "unchanged"
               : "updated",
       changes,
+      beforeRow: beforeRow ?? null,
+      afterRow: afterRow ?? null,
     });
   }
 
@@ -793,16 +1539,18 @@ function buildMutationRowDiffs(
 function resolveMutationRowKey(
   beforeRow: Record<string, unknown> | undefined,
   afterRow: Record<string, unknown> | undefined,
-  keyColumn: string,
-  fallbackKey: string | number,
-): string | number | null {
-  const rowKey = afterRow?.[keyColumn] ?? beforeRow?.[keyColumn];
-
-  if (typeof rowKey === "string" || typeof rowKey === "number") {
-    return rowKey;
+  keyColumns: readonly string[],
+  fallbackKey: SqliteRowKey,
+): SqliteRowKey | null {
+  if (afterRow) {
+    return getRowKeyFromRow(afterRow, keyColumns);
   }
 
-  return fallbackKey ?? null;
+  if (beforeRow) {
+    return getRowKeyFromRow(beforeRow, keyColumns);
+  }
+
+  return fallbackKey ? normalizeRowKey(fallbackKey, keyColumns) : null;
 }
 
 function diffRowValues(
@@ -868,7 +1616,7 @@ function areMutationValuesEqual(left: unknown, right: unknown): boolean {
 }
 
 async function insertRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   row: TRow,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
@@ -896,16 +1644,18 @@ async function insertRow<TRow extends object>(
 }
 
 async function updateRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   mutation: PendingMutation<TRow>,
   columnNames: Set<string>,
   structuredColumns: StructuredColumns,
+  existingRow: Record<string, unknown> | undefined,
+  mutationKey: SqliteRowKey,
 ): Promise<void> {
   const changes = withUpdateSystemFields(mutation.changes, columnNames);
-  await validateReferenceColumns(options, changes);
+  await validateReferenceColumns(options, changes, existingRow);
   const serializedChanges = serializeRowValues(changes, structuredColumns);
   const entries = Object.entries(serializedChanges).filter(
-    ([column]) => column !== options.keyColumn,
+    ([column]) => !options.keyColumns.includes(column as keyof TRow & string),
   );
 
   if (entries.length === 0) {
@@ -916,20 +1666,23 @@ async function updateRow<TRow extends object>(
     ([column]) => `"${escapeIdentifier(column)}" = ?`,
   );
   const values = entries.map(([, value]) => value) as any[];
+  const predicate = buildKeyPredicate(mutationKey, options.keyColumns);
 
   await options.database.execute(
-    `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(", ")} WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
-    [...values, mutation.key],
+    `UPDATE "${escapeIdentifier(options.tableName)}" SET ${assignments.join(", ")} ${predicate.whereClause};`,
+    [...values, ...predicate.bind],
   );
 }
 
 async function deleteRow<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
-  key: string | number,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
+  key: SqliteRowKey,
 ): Promise<void> {
+  const predicate = buildKeyPredicate(key, options.keyColumns);
+
   await options.database.execute(
-    `DELETE FROM "${escapeIdentifier(options.tableName)}" WHERE "${escapeIdentifier(options.keyColumn)}" = ?;`,
-    [key],
+    `DELETE FROM "${escapeIdentifier(options.tableName)}" ${predicate.whereClause};`,
+    predicate.bind,
   );
 }
 
@@ -972,27 +1725,49 @@ function withUpdateSystemFields<TRow extends object>(
 }
 
 async function validateReferenceColumns<TRow extends object>(
-  options: CreateSqliteCollectionOptions<TRow, string | number, SqliteIndexMap>,
+  options: CreateSqliteCollectionOptions<TRow, any, SqliteIndexMap>,
   rowOrChanges: Record<string, unknown>,
+  existingRow?: Record<string, unknown>,
 ): Promise<void> {
   const referenceColumns = options.referenceColumns as
     | Record<string, SqliteReferenceColumn | undefined>
     | undefined;
+  const nextRow = existingRow ? { ...existingRow, ...rowOrChanges } : rowOrChanges;
 
   for (const [columnName, config] of Object.entries(referenceColumns ?? {})) {
-    if (!config?.enforceExists || !(columnName in rowOrChanges)) {
+    const shouldValidate =
+      columnName in rowOrChanges ||
+      (config?.actorScoped === true && "_actor" in rowOrChanges);
+
+    if (!config?.enforceExists || !shouldValidate) {
       continue;
     }
 
-    const value = rowOrChanges[columnName];
+    const value = nextRow[columnName];
 
     if (value === null || value === undefined || value === "") {
       continue;
     }
 
+    const actorId = nextRow._actor;
+
+    if (config.actorScoped && actorId === undefined) {
+      throw new Error(
+        `Cannot validate actor-scoped reference "${columnName}" without an "_actor" value.`,
+      );
+    }
+
+    const referenceKey = config.actorScoped
+      ? {
+          _actor: actorId as never,
+          _id: value as never,
+        }
+      : value;
+
     const exists = await options.database.rowExists(
       config.referencedTable,
-      value as any,
+      referenceKey as SqliteKey,
+      config.keyColumns,
     );
     if (!exists) {
       throw new Error(
@@ -1007,9 +1782,13 @@ function currentTimestamp(): bigint {
 }
 
 type SqliteComparisonOperator = "=" | ">" | ">=" | "<" | "<=";
+type SqliteMatchOperator = SqliteComparisonOperator | "LIKE";
+type SqliteNullCheckOperator = "IS NULL" | "IS NOT NULL";
 
 interface SqliteQueryRangeState {
   equals: Array<{ field: string; value: unknown }>;
+  likes: Array<{ field: string; value: unknown }>;
+  nullChecks: Array<{ field: string; operator: SqliteNullCheckOperator }>;
   lowerBound: { field: string; value: unknown; operator: ">" | ">=" } | null;
   upperBound: { field: string; value: unknown; operator: "<" | "<=" } | null;
 }
@@ -1021,6 +1800,8 @@ class RuntimeIndexRangeBuilder<TRow extends object>
 {
   private state: SqliteQueryRangeState = {
     equals: [],
+    likes: [],
+    nullChecks: [],
     lowerBound: null,
     upperBound: null,
   };
@@ -1050,9 +1831,26 @@ class RuntimeIndexRangeBuilder<TRow extends object>
     return this as unknown as RuntimeIndexRangeBuilder<TRow>;
   }
 
+  like(field: string, value: unknown) {
+    this.state.likes.push({ field, value });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
+  isKnown(field: string) {
+    this.state.nullChecks.push({ field, operator: "IS NOT NULL" });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
+  isUnknown(field: string) {
+    this.state.nullChecks.push({ field, operator: "IS NULL" });
+    return this as unknown as RuntimeIndexRangeBuilder<TRow>;
+  }
+
   getState(): SqliteQueryRangeState {
     return {
       equals: [...this.state.equals],
+      likes: [...this.state.likes],
+      nullChecks: [...this.state.nullChecks],
       lowerBound: this.state.lowerBound,
       upperBound: this.state.upperBound,
     };
@@ -1090,6 +1888,7 @@ function buildIndexedSelectSql(
   tableName: string,
   indexFields: readonly string[],
   range: SqliteQueryRangeState,
+  cursorValues: Record<string, unknown> | null,
   direction: "asc" | "desc",
   structuredColumns: StructuredColumns,
   limit?: number,
@@ -1105,6 +1904,25 @@ function buildIndexedSelectSql(
       "=",
       equality.value,
       structuredColumns,
+    );
+  }
+
+  for (const like of range.likes) {
+    appendWhereClause(
+      whereClauses,
+      bind,
+      like.field,
+      "LIKE",
+      like.value,
+      structuredColumns,
+    );
+  }
+
+  for (const nullCheck of range.nullChecks) {
+    appendNullCheckClause(
+      whereClauses,
+      nullCheck.field,
+      nullCheck.operator,
     );
   }
 
@@ -1126,6 +1944,17 @@ function buildIndexedSelectSql(
       range.upperBound.field,
       range.upperBound.operator,
       range.upperBound.value,
+      structuredColumns,
+    );
+  }
+
+  if (cursorValues) {
+    appendCursorClause(
+      whereClauses,
+      bind,
+      indexFields,
+      cursorValues,
+      direction,
       structuredColumns,
     );
   }
@@ -1154,12 +1983,69 @@ function appendWhereClause(
   whereClauses: string[],
   bind: unknown[],
   field: string,
-  operator: SqliteComparisonOperator,
+  operator: SqliteMatchOperator,
   value: unknown,
   structuredColumns: StructuredColumns,
 ): void {
   whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator} ?`);
   bind.push(serializeQueryValue(field, value, structuredColumns));
+}
+
+function appendNullCheckClause(
+  whereClauses: string[],
+  field: string,
+  operator: SqliteNullCheckOperator,
+): void {
+  whereClauses.push(`${fieldPathToSqlExpression(field)} ${operator}`);
+}
+
+function appendCursorClause(
+  whereClauses: string[],
+  bind: unknown[],
+  indexFields: readonly string[],
+  cursorValues: Record<string, unknown>,
+  direction: "asc" | "desc",
+  structuredColumns: StructuredColumns,
+): void {
+  const comparisonOperator = direction === "asc" ? ">" : "<";
+  const branchClauses: string[] = [];
+
+  for (let fieldIndex = 0; fieldIndex < indexFields.length; fieldIndex += 1) {
+    const field = indexFields[fieldIndex];
+
+    if (!field) {
+      continue;
+    }
+
+    const branchParts: string[] = [];
+
+    for (let prefixIndex = 0; prefixIndex < fieldIndex; prefixIndex += 1) {
+      const prefixField = indexFields[prefixIndex];
+
+      if (!prefixField) {
+        continue;
+      }
+
+      branchParts.push(`${fieldPathToSqlExpression(prefixField)} = ?`);
+      bind.push(
+        serializeQueryValue(
+          prefixField,
+          cursorValues[prefixField],
+          structuredColumns,
+        ),
+      );
+    }
+
+    branchParts.push(`${fieldPathToSqlExpression(field)} ${comparisonOperator} ?`);
+    bind.push(
+      serializeQueryValue(field, cursorValues[field], structuredColumns),
+    );
+    branchClauses.push(`(${branchParts.join(" AND ")})`);
+  }
+
+  if (branchClauses.length > 0) {
+    whereClauses.push(`(${branchClauses.join(" OR ")})`);
+  }
 }
 
 function serializeQueryValue(
