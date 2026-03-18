@@ -24,6 +24,9 @@ import { serializeWorkerError } from '@/lib/shared-opfs-protocol'
 
 const ACTIVE_OWNER_LOCK_NAME = 'sink.shared-opfs.active-owner'
 const HEARTBEAT_INTERVAL_MS = 5_000
+const SHARED_OPFS_DEBUG = import.meta.env.DEV
+const SLOW_REQUEST_THRESHOLD_MS = 2_000
+const SHARED_OPFS_TAB_ID_STORAGE_KEY = 'sink.shared-opfs.tab-id'
 
 interface DatabaseCreationResult {
   database: AsyncSqliteDatabase
@@ -34,12 +37,20 @@ interface Deferred<TValue> {
   promise: Promise<TValue>
   resolve: (value: TValue) => void
   reject: (error: unknown) => void
+  label?: string
+  requestId?: string
+  startedAt?: number
+  slowTimer?: ReturnType<typeof setTimeout> | null
 }
 
 export async function createSharedOpfsDatabase(options: {
   filename: string
 }): Promise<DatabaseCreationResult> {
   if (!supportsSharedOpfs()) {
+    debugMain('fallback-createDatabase', {
+      filename: options.filename,
+      reason: 'shared worker OPFS path is unavailable',
+    })
     return createDatabase({
       preferredPersistence: 'opfs',
       opfsFilename: options.filename,
@@ -47,10 +58,18 @@ export async function createSharedOpfsDatabase(options: {
   }
 
   const database = await SharedWorkerSqliteDatabase.create(options.filename)
+  debugMain('shared-worker-database-created', {
+    filename: options.filename,
+  })
   return {
     database,
     persistenceType: 'opfs',
   }
+}
+
+export function getSharedOpfsBrowserTabId(): string | null {
+  const tabId = readSharedOpfsTabId()
+  return tabId ? shortId(tabId) : null
 }
 
 export async function clearSharedBrowserDatabase(options: {
@@ -99,7 +118,7 @@ function supportsSharedOpfs(): boolean {
 
 class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
   readonly version = 'shared-opfs'
-  readonly #tabId = crypto.randomUUID()
+  readonly #tabId = getOrCreateSharedOpfsTabId()
   readonly #filename: string
   readonly #worker: Worker
   readonly #coordinator: SharedWorker
@@ -131,7 +150,9 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
 
   static async create(filename: string): Promise<SharedWorkerSqliteDatabase> {
     const database = new SharedWorkerSqliteDatabase(filename)
+    database.debug('create:start', { filename })
     await database.initialize()
+    database.debug('create:ready', { filename })
     return database
   }
 
@@ -180,9 +201,14 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
 
   async close(): Promise<void> {
     if (this.#closed) {
+      this.debug('close:ignored-already-closed')
       return
     }
 
+    this.debug('close:start', {
+      pendingCoordinatorRequests: this.#pendingCoordinatorRequests.size,
+      pendingWorkerRequests: this.#pendingWorkerRequests.size,
+    })
     this.#closed = true
 
     if (this.#heartbeatTimer !== null) {
@@ -207,19 +233,23 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     this.#worker.terminate()
 
     for (const deferred of this.#pendingCoordinatorRequests.values()) {
+      clearDeferredDebugTimer(deferred)
       void deferred.promise.catch(() => {})
       deferred.reject(new Error('Shared OPFS database closed.'))
     }
     for (const deferred of this.#pendingWorkerRequests.values()) {
+      clearDeferredDebugTimer(deferred)
       void deferred.promise.catch(() => {})
       deferred.reject(new Error('Shared OPFS database worker closed.'))
     }
 
     this.#pendingCoordinatorRequests.clear()
     this.#pendingWorkerRequests.clear()
+    this.debug('close:complete')
   }
 
   private async initialize(): Promise<void> {
+    this.debug('initialize:start', { filename: this.#filename })
     this.#port.start()
     this.#port.addEventListener('message', this.handleCoordinatorMessage)
     this.#worker.addEventListener('message', this.handleWorkerMessage)
@@ -228,6 +258,7 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
       type: 'register',
       tabId: this.#tabId,
     } satisfies CoordinatorClientMessage)
+    this.debug('initialize:registered-with-coordinator')
 
     this.#heartbeatTimer = setInterval(() => {
       this.#port.postMessage({
@@ -236,9 +267,13 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         sentAt: Date.now(),
       } satisfies CoordinatorClientMessage)
     }, HEARTBEAT_INTERVAL_MS)
+    this.debug('initialize:heartbeat-started', {
+      intervalMs: HEARTBEAT_INTERVAL_MS,
+    })
 
     window.addEventListener('pagehide', this.handlePageHide)
     window.addEventListener('beforeunload', this.handlePageHide)
+    this.debug('initialize:complete')
   }
 
   private readonly handlePageHide = () => {
@@ -246,6 +281,7 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
       return
     }
 
+    this.debug('pagehide:unregister')
     try {
       this.#port.postMessage({
         type: 'unregister',
@@ -267,6 +303,9 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
           return
         }
 
+        this.debug('coordinator:role', {
+          isActive: message.isActive,
+        })
         this.#roleTransition = this.#roleTransition
           .then(async () => {
             if (message.isActive) {
@@ -279,6 +318,11 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         return
       }
       case 'execute-request': {
+        this.debug('coordinator:execute-request', {
+          requestId: message.requestId,
+          requesterTabId: shortId(message.requesterTabId),
+          method: message.method,
+        })
         void this.executeCoordinatorRequest(message)
         return
       }
@@ -290,10 +334,22 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         }
 
         this.#pendingCoordinatorRequests.delete(message.requestId)
+        clearDeferredDebugTimer(deferred)
 
         if (message.ok) {
+          this.debug('coordinator:request-resolved', {
+            requestId: message.requestId,
+            label: deferred.label,
+            durationMs: elapsedMs(deferred.startedAt),
+          })
           deferred.resolve(message.result)
         } else {
+          this.debug('coordinator:request-rejected', {
+            requestId: message.requestId,
+            label: deferred.label,
+            durationMs: elapsedMs(deferred.startedAt),
+            error: message.error.message,
+          })
           deferred.reject(deserializeWorkerError(message.error))
         }
       }
@@ -311,31 +367,54 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     }
 
     this.#pendingWorkerRequests.delete(message.requestId)
+    clearDeferredDebugTimer(deferred)
 
     if (message.ok) {
+      this.debug('worker:request-resolved', {
+        requestId: message.requestId,
+        label: deferred.label,
+        durationMs: elapsedMs(deferred.startedAt),
+      })
       deferred.resolve(message.result)
     } else {
+      this.debug('worker:request-rejected', {
+        requestId: message.requestId,
+        label: deferred.label,
+        durationMs: elapsedMs(deferred.startedAt),
+        error: message.error.message,
+      })
       deferred.reject(deserializeWorkerError(message.error))
     }
   }
 
   private async activateWorker(): Promise<void> {
     if (this.#active || this.#closed) {
+      this.debug('activate:skipped', {
+        active: this.#active,
+        closed: this.#closed,
+      })
       return
     }
 
     try {
+      this.debug('activate:start')
       this.#releaseActiveOwnerLock = await acquireActiveOwnerLock()
+      this.debug('activate:lock-acquired')
       await this.requestWorkerOpen()
       this.#active = true
+      this.debug('activate:worker-opened')
       this.#port.postMessage({
         type: 'active-ready',
         tabId: this.#tabId,
       } satisfies CoordinatorClientMessage)
+      this.debug('activate:ready-sent')
     } catch (error) {
       this.#releaseActiveOwnerLock?.()
       this.#releaseActiveOwnerLock = null
       this.#active = false
+      this.debug('activate:failed', {
+        error: getErrorMessage(error),
+      })
       this.#port.postMessage({
         type: 'active-failed',
         tabId: this.#tabId,
@@ -347,10 +426,12 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
 
   private async deactivateWorker(): Promise<void> {
     if (!this.#active && this.#releaseActiveOwnerLock === null) {
+      this.debug('deactivate:skipped')
       return
     }
 
     try {
+      this.debug('deactivate:start')
       await this.requestWorkerClose()
     } catch {
       // Ignore shutdown errors while handing off the active worker.
@@ -359,12 +440,18 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     this.#releaseActiveOwnerLock?.()
     this.#releaseActiveOwnerLock = null
     this.#active = false
+    this.debug('deactivate:complete')
   }
 
   private async executeCoordinatorRequest(
     message: Extract<CoordinatorServerMessage, { type: 'execute-request' }>,
   ): Promise<void> {
     try {
+      this.debug('execute-coordinator-request:start', {
+        requestId: message.requestId,
+        method: message.method,
+        requesterTabId: shortId(message.requesterTabId),
+      })
       const result = await this.requestWorkerCall(message.method, message.args)
       this.#port.postMessage({
         type: 'db-response',
@@ -374,6 +461,10 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         ok: true,
         result,
       } satisfies CoordinatorClientMessage)
+      this.debug('execute-coordinator-request:success', {
+        requestId: message.requestId,
+        method: message.method,
+      })
     } catch (error) {
       this.#port.postMessage({
         type: 'db-response',
@@ -383,6 +474,11 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         ok: false,
         error: serializeWorkerError(error),
       } satisfies CoordinatorClientMessage)
+      this.debug('execute-coordinator-request:error', {
+        requestId: message.requestId,
+        method: message.method,
+        error: getErrorMessage(error),
+      })
     }
   }
 
@@ -414,7 +510,7 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
   }
 
   private requestWorker<TResult>(
-    _label: string,
+    label: string,
     message: DedicatedWorkerRequest,
   ): Promise<TResult> {
     if (this.#closed) {
@@ -422,7 +518,20 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     }
 
     const deferred = createDeferred<TResult>()
+    deferred.label = label
+    deferred.requestId = message.requestId
+    deferred.startedAt = Date.now()
+    deferred.slowTimer = createSlowRequestTimer({
+      tabId: this.#tabId,
+      requestId: message.requestId,
+      label,
+      channel: 'worker',
+    })
     this.#pendingWorkerRequests.set(message.requestId, deferred as Deferred<unknown>)
+    this.debug('worker:request-start', {
+      requestId: message.requestId,
+      label,
+    })
     this.#worker.postMessage(message)
     return deferred.promise
   }
@@ -437,7 +546,20 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
 
     const requestId = crypto.randomUUID()
     const deferred = createDeferred<SharedSqliteMethodResult[TMethod]>()
+    deferred.label = method
+    deferred.requestId = requestId
+    deferred.startedAt = Date.now()
+    deferred.slowTimer = createSlowRequestTimer({
+      tabId: this.#tabId,
+      requestId,
+      label: method,
+      channel: 'coordinator',
+    })
     this.#pendingCoordinatorRequests.set(requestId, deferred as Deferred<unknown>)
+    this.debug('coordinator:request-start', {
+      requestId,
+      method,
+    })
     this.#port.postMessage({
       type: 'db-request',
       tabId: this.#tabId,
@@ -446,6 +568,14 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
       args: args as SharedSqliteMethodArgs[SharedSqliteMethod],
     } satisfies CoordinatorClientMessage)
     return deferred.promise
+  }
+
+  private debug(event: string, details?: Record<string, unknown>): void {
+    debugMain(event, {
+      tabId: shortId(this.#tabId),
+      filename: this.#filename,
+      ...details,
+    })
   }
 }
 
@@ -498,6 +628,34 @@ function createDeferred<TValue>(): Deferred<TValue> {
   }
 }
 
+function createSlowRequestTimer(input: {
+  tabId: string
+  requestId: string
+  label: string
+  channel: 'worker' | 'coordinator'
+}): ReturnType<typeof setTimeout> | null {
+  if (!SHARED_OPFS_DEBUG) {
+    return null
+  }
+
+  return setTimeout(() => {
+    debugMain('request:still-pending', {
+      tabId: shortId(input.tabId),
+      channel: input.channel,
+      requestId: input.requestId,
+      label: input.label,
+      thresholdMs: SLOW_REQUEST_THRESHOLD_MS,
+    })
+  }, SLOW_REQUEST_THRESHOLD_MS)
+}
+
+function clearDeferredDebugTimer(deferred: Deferred<unknown>): void {
+  if (deferred.slowTimer !== null && deferred.slowTimer !== undefined) {
+    clearTimeout(deferred.slowTimer)
+    deferred.slowTimer = null
+  }
+}
+
 async function dropAllUserTables(database: AsyncSqliteDatabase): Promise<void> {
   const tables = await database.query<{ name: string }>(
     `SELECT name
@@ -536,4 +694,56 @@ function isMissingOpfsEntryError(error: unknown): boolean {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function elapsedMs(startedAt?: number): number | null {
+  return typeof startedAt === 'number' ? Date.now() - startedAt : null
+}
+
+function shortId(value: string): string {
+  return value.slice(0, 8)
+}
+
+function getOrCreateSharedOpfsTabId(): string {
+  const existing = readSharedOpfsTabId()
+
+  if (existing) {
+    return existing
+  }
+
+  const nextTabId = crypto.randomUUID()
+
+  try {
+    window.sessionStorage.setItem(SHARED_OPFS_TAB_ID_STORAGE_KEY, nextTabId)
+  } catch {
+    // Ignore storage failures and continue with an in-memory-only tab id.
+  }
+
+  return nextTabId
+}
+
+function readSharedOpfsTabId(): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const existing = window.sessionStorage.getItem(SHARED_OPFS_TAB_ID_STORAGE_KEY)
+    return existing && existing.length > 0 ? existing : null
+  } catch {
+    return null
+  }
+}
+
+function debugMain(event: string, details?: Record<string, unknown>): void {
+  if (!SHARED_OPFS_DEBUG) {
+    return
+  }
+
+  if (details) {
+    console.debug('[shared-opfs:main]', event, details)
+    return
+  }
+
+  console.debug('[shared-opfs:main]', event)
 }

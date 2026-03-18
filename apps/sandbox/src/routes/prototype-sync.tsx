@@ -21,6 +21,7 @@ import {
   type PrototypeSyncWorkspace,
 } from '@/lib/prototype-sync-workspace'
 import { hardClearSqliteDemoLocalDatabase } from '@/lib/sqlite-demo-collections'
+import { getSharedOpfsBrowserTabId } from '@/lib/shared-opfs-database'
 
 const emptySyncSnapshot: PrototypeSyncSnapshot = {
   connection: 'stopped',
@@ -43,6 +44,7 @@ interface FieldDraft {
 }
 
 function PrototypeSyncPage() {
+  const browserTabId = getSharedOpfsBrowserTabId()
   const [workspace, setWorkspace] = useState<PrototypeSyncWorkspace | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [selectedActorId, setSelectedActorId] = useState<Id<'actors'> | ''>('')
@@ -53,6 +55,18 @@ function PrototypeSyncPage() {
   const [isClearingLocal, setIsClearingLocal] = useState(false)
   const [isResettingServer, setIsResettingServer] = useState(false)
   const workspaceRef = useRef<PrototypeSyncWorkspace | null>(null)
+
+  useEffect(() => {
+    const previousTitle = document.title
+
+    if (browserTabId) {
+      document.title = `Prototype Sync [${browserTabId}]`
+    }
+
+    return () => {
+      document.title = previousTitle
+    }
+  }, [browserTabId])
 
   useEffect(() => {
     let cancelled = false
@@ -384,6 +398,11 @@ function PrototypeSyncPage() {
             <CardDescription>{loadingError}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {browserTabId && (
+              <div className="text-xs text-muted-foreground">
+                Browser tab id: <code>{browserTabId}</code>
+              </div>
+            )}
             {resetError && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                 {resetError}
@@ -424,6 +443,11 @@ function PrototypeSyncPage() {
             <CardDescription>Loading local workspace and manual sync client…</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {browserTabId && (
+              <div className="text-xs text-muted-foreground">
+                Browser tab id: <code>{browserTabId}</code>
+              </div>
+            )}
             {resetError && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                 {resetError}
@@ -465,6 +489,7 @@ function PrototypeSyncPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {browserTabId && <Badge variant="outline">tab {browserTabId}</Badge>}
           <Badge variant={syncSnapshot.connection === 'connected' ? 'default' : 'secondary'}>
             {syncSnapshot.connection}
           </Badge>
