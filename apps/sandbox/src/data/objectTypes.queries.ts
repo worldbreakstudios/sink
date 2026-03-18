@@ -1,6 +1,6 @@
-import type { ObjectTypeRow } from '@/data/generated/schema.gen'
-import { type QueryDefinition } from '@/data/prototype/types'
-import { invalidationTouchesTable, normalizeObjectTypeRows, reconcileScopedRows } from '@/data/prototype/helpers'
+import type { ObjectTypeRow } from './generated/schema.gen.ts'
+import { type QueryDefinition } from './prototype/types.ts'
+import { invalidationTouchesTable, normalizeObjectTypeRows, reconcileScopedRows } from './prototype/helpers.ts'
 
 export interface ListObjectTypesArgs {}
 

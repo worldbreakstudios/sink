@@ -1,6 +1,6 @@
 import type { AsyncSqliteDatabase } from '@sink/lib'
-import { ensurePrototypeServerTables, SERVER_LOCKS_TABLE, markExpiredServerTransactions, serializeServerLockKey } from './server-state'
-import type { LockStore, LockStoreAcquireResult, LockTarget } from './types'
+import { ensurePrototypeServerTables, SERVER_LOCKS_TABLE, markExpiredServerTransactions, serializeServerLockKey } from './server-state.ts'
+import type { LockStore, LockStoreAcquireResult, LockTarget } from './types.ts'
 
 export function createSqliteLockStore(
   database: AsyncSqliteDatabase,

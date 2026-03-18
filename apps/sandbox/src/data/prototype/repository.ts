@@ -4,8 +4,8 @@ import type {
   Id,
   ObjectRow,
   ObjectTypeRow,
-} from '@/data/generated/schema.gen'
-import type { RepositoryContext } from './types'
+} from '../generated/schema.gen.ts'
+import type { RepositoryContext } from './types.ts'
 
 export function createSqlitePrototypeRepository(
   database: AsyncSqliteDatabase,

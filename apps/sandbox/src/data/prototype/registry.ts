@@ -1,16 +1,16 @@
-import { listFieldsByObjectQuery } from '@/data/fields.queries'
-import { upsertFieldByObjectTypeMutation } from '@/data/fields.mutations'
-import { listObjectTypesQuery } from '@/data/objectTypes.queries'
-import { renameObjectTypeMutation } from '@/data/objectTypes.mutations'
+import { listFieldsByObjectQuery } from '../fields.queries.ts'
+import { upsertFieldByObjectTypeMutation } from '../fields.mutations.ts'
+import { listObjectTypesQuery } from '../objectTypes.queries.ts'
+import { renameObjectTypeMutation } from '../objectTypes.mutations.ts'
 import {
   changeObjectTypeMutation,
   createObjectMutation,
-} from '@/data/objects/objects.mutations'
+} from '../objects/objects.mutations.ts'
 import {
   getObjectByIdQuery,
   listObjectsByActorQuery,
-} from '@/data/objects/objects.queries'
-import type { MutationRegistry, QueryRegistry } from './types'
+} from '../objects/objects.queries.ts'
+import type { MutationRegistry, QueryRegistry } from './types.ts'
 
 export const prototypeQueries = {
   [listObjectTypesQuery.name]: listObjectTypesQuery,

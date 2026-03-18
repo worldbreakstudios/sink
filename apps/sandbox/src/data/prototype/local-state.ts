@@ -5,9 +5,9 @@ import type {
   OfflineQueueEntry,
   PrototypeTableName,
   PrototypeSyncSnapshot,
-} from './types'
-import { parsePrototypeJson, serializePrototypeJson } from './json'
-import { serializePrototypeKey } from './helpers'
+} from './types.ts'
+import { parsePrototypeJson, serializePrototypeJson } from './json.ts'
+import { serializePrototypeKey } from './helpers.ts'
 
 const CLIENT_STATE_TABLE = 'prototype_client_state'
 const ACTIVE_TRANSACTIONS_TABLE = 'prototype_active_ws_transactions'

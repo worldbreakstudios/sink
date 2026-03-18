@@ -3,8 +3,8 @@ import type {
   InvalidationTarget,
   LockTarget,
   ServerTransactionRecord,
-} from './types'
-import { parsePrototypeJson, serializePrototypeJson } from './json'
+} from './types.ts'
+import { parsePrototypeJson, serializePrototypeJson } from './json.ts'
 
 export const SERVER_TRANSACTIONS_TABLE = 'prototype_server_transactions'
 export const SERVER_LOCKS_TABLE = 'prototype_server_locks'

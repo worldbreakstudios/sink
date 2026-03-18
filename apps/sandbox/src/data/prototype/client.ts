@@ -1,4 +1,4 @@
-import { createBatchTransaction, type SchemaCollections } from '@/data/generated/schema.gen'
+import { createBatchTransaction, type SchemaCollections } from '../generated/schema.gen.ts'
 import {
   clearOfflineQueueConflict,
   enqueueOfflineMutation,
@@ -13,9 +13,9 @@ import {
   removeActiveTransaction,
   removeOfflineQueueEntry,
   upsertActiveTransaction,
-} from './local-state'
-import { parsePrototypeJson, serializePrototypeJson } from './json'
-import { prototypeMutations } from './registry'
+} from './local-state.ts'
+import { parsePrototypeJson, serializePrototypeJson } from './json.ts'
+import { prototypeMutations } from './registry.ts'
 import type {
   InvalidationTarget,
   LockTarget,
@@ -27,7 +27,7 @@ import type {
   PrototypeTableName,
   PrototypeServerMessage,
   QueryDefinition,
-} from './types'
+} from './types.ts'
 import type { AsyncSqliteDatabase } from '@sink/lib'
 
 interface PendingTransactionContext {

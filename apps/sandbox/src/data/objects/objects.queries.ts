@@ -1,6 +1,6 @@
-import type { Id, ObjectKey, ObjectRow } from '@/data/generated/schema.gen'
-import { invalidationTouchesTable, objectRowBelongsToActor, reconcileScopedRows } from '@/data/prototype/helpers'
-import type { QueryDefinition } from '@/data/prototype/types'
+import type { Id, ObjectKey, ObjectRow } from '../generated/schema.gen.ts'
+import { invalidationTouchesTable, objectRowBelongsToActor, reconcileScopedRows } from '../prototype/helpers.ts'
+import type { QueryDefinition } from '../prototype/types.ts'
 
 export interface ListObjectsByActorArgs {
   actorId: Id<'actors'>

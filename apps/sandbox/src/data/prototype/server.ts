@@ -1,21 +1,21 @@
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
-import { createSqliteLockStore } from './lock-store'
-import { parsePrototypeJson, serializePrototypeJson } from './json'
-import { prototypeMutations, prototypeQueries } from './registry'
-import { createSqlitePrototypeRepository } from './repository'
+import { createSqliteLockStore } from './lock-store.ts'
+import { parsePrototypeJson, serializePrototypeJson } from './json.ts'
+import { prototypeMutations, prototypeQueries } from './registry.ts'
+import { createSqlitePrototypeRepository } from './repository.ts'
 import {
   ensurePrototypeServerTables,
   insertOpenedServerTransaction,
   readServerTransaction,
   updateServerTransaction,
-} from './server-state'
+} from './server-state.ts'
 import type {
   InvalidationTarget,
   MutationDefinition,
   PrototypeClientMessage,
   PrototypeServerBackend,
   PrototypeServerMessage,
-} from './types'
+} from './types.ts'
 import type { AsyncSqliteDatabase } from '@sink/lib'
 
 const DEFAULT_WEBSOCKET_PATH = '/ws/transactions'

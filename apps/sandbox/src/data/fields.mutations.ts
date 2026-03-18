@@ -1,8 +1,8 @@
-import type { FieldKey, FieldRow, Id } from '@/data/generated/schema.gen'
-import { createFieldRow } from '@/data/prototype/repository'
-import { createUniqueLockTarget } from '@/data/prototype/helpers'
-import { prototypeValuesEqual } from '@/data/prototype/json'
-import type { MutationDefinition } from '@/data/prototype/types'
+import type { FieldKey, FieldRow, Id } from './generated/schema.gen.ts'
+import { createFieldRow } from './prototype/repository.ts'
+import { createUniqueLockTarget } from './prototype/helpers.ts'
+import { prototypeValuesEqual } from './prototype/json.ts'
+import type { MutationDefinition } from './prototype/types.ts'
 
 export interface UpsertFieldByObjectTypeArgs {
   actorId: Id<'actors'>

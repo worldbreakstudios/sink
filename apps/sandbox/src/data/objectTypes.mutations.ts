@@ -1,7 +1,7 @@
-import type { Id, ObjectTypeRow } from '@/data/generated/schema.gen'
-import { createPrimaryLockTarget } from '@/data/prototype/helpers'
-import { prototypeValuesEqual } from '@/data/prototype/json'
-import type { MutationDefinition } from '@/data/prototype/types'
+import type { Id, ObjectTypeRow } from './generated/schema.gen.ts'
+import { createPrimaryLockTarget } from './prototype/helpers.ts'
+import { prototypeValuesEqual } from './prototype/json.ts'
+import type { MutationDefinition } from './prototype/types.ts'
 
 export interface RenameObjectTypeArgs {
   objectTypeId: Id<'objectTypes'>

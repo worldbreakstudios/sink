@@ -1,8 +1,8 @@
-import type { Id, ObjectRow } from '@/data/generated/schema.gen'
-import { createObjectRow } from '@/data/prototype/repository'
-import { createPrimaryLockTarget } from '@/data/prototype/helpers'
-import { prototypeValuesEqual } from '@/data/prototype/json'
-import type { MutationDefinition } from '@/data/prototype/types'
+import type { Id, ObjectRow } from '../generated/schema.gen.ts'
+import { createObjectRow } from '../prototype/repository.ts'
+import { createPrimaryLockTarget } from '../prototype/helpers.ts'
+import { prototypeValuesEqual } from '../prototype/json.ts'
+import type { MutationDefinition } from '../prototype/types.ts'
 
 export interface CreateObjectArgs {
   actorId: Id<'actors'>

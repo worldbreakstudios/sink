@@ -1,4 +1,4 @@
-import { createBatchTransaction, KEY_COLUMNS, type AnyKey, type AnyRow, type FieldRow, type ObjectRow, type ObjectTypeRow, type SchemaCollections } from '@/data/generated/schema.gen'
+import { createBatchTransaction, KEY_COLUMNS, type AnyKey, type AnyRow, type FieldRow, type ObjectRow, type ObjectTypeRow, type SchemaCollections } from '../generated/schema.gen.ts'
 import type {
   InvalidationTarget,
   MutablePrototypeCollection,
@@ -6,8 +6,8 @@ import type {
   PrototypeRow,
   PrototypeTableName,
   QueryLocalContext,
-} from './types'
-import { prototypeValuesEqual } from './json'
+} from './types.ts'
+import { prototypeValuesEqual } from './json.ts'
 
 export function getPrototypeCollection(
   collections: SchemaCollections,

@@ -1,7 +1,7 @@
 import type { AsyncSqliteDatabase } from '@sink/lib'
 import {
   createBatchTransaction,
-} from '@/data/generated/schema.gen'
+} from '../generated/schema.gen.ts'
 import type {
   AnyKey,
   AnyRow,
@@ -13,7 +13,7 @@ import type {
   ObjectTypeRow,
   SchemaCollections,
   TableName,
-} from '@/data/generated/schema.gen'
+} from '../generated/schema.gen.ts'
 
 export type PrototypeTableName = 'objects' | 'fields' | 'objectTypes'
 export type PrototypeRow = ObjectRow | FieldRow | ObjectTypeRow
