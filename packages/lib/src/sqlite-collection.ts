@@ -181,6 +181,28 @@ function createChannelEventBus<TEvent>(): ChannelEventBus<TEvent> {
 export const sqliteMutationEventBus =
   createChannelEventBus<SqliteMutationEvent>();
 
+const SQLITE_MUTATION_BROADCAST_CHANNEL = "sink.sqlite.mutation-events";
+
+const sqliteMutationBroadcastChannel =
+  typeof BroadcastChannel === "undefined"
+    ? null
+    : new BroadcastChannel(SQLITE_MUTATION_BROADCAST_CHANNEL);
+
+sqliteMutationBroadcastChannel?.addEventListener(
+  "message",
+  (event) => {
+    const payload = (event as { data?: unknown }).data as
+      | SqliteMutationEvent
+      | null;
+
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    sqliteMutationEventBus.publish(payload.tableName, payload);
+  },
+);
+
 export function getSqliteMutationChannel(tableName: string): string {
   return tableName;
 }
@@ -1495,6 +1517,7 @@ function createMutationEvent<TRow extends object>(
 
 function logMutationDiff(event: SqliteMutationEvent): void {
   sqliteMutationEventBus.publish(event.tableName, event);
+  sqliteMutationBroadcastChannel?.postMessage(event);
 }
 
 function buildMutationRowDiffs(

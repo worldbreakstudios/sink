@@ -34,6 +34,7 @@ export async function ensurePrototypeLocalStateTables(
     )
     await database.execute(
       `CREATE TABLE IF NOT EXISTS "${ACTIVE_TRANSACTIONS_TABLE}" (
+        "clientId" TEXT,
         "transactionId" TEXT PRIMARY KEY,
         "mutationName" TEXT NOT NULL,
         "argsJson" TEXT NOT NULL,
@@ -44,6 +45,14 @@ export async function ensurePrototypeLocalStateTables(
         "updatedAt" INTEGER NOT NULL
       );`,
     )
+    const activeTransactionColumns = await database.query<{ name: string }>(
+      `PRAGMA table_info("${ACTIVE_TRANSACTIONS_TABLE}");`,
+    )
+    if (!activeTransactionColumns.some((column) => column.name === 'clientId')) {
+      await database.execute(
+        `ALTER TABLE "${ACTIVE_TRANSACTIONS_TABLE}" ADD COLUMN "clientId" TEXT;`,
+      )
+    }
     await database.execute(
       `CREATE TABLE IF NOT EXISTS "${OFFLINE_QUEUE_TABLE}" (
         "queueId" INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +101,7 @@ export async function upsertActiveTransaction(
   await ensurePrototypeLocalStateTables(database)
   await database.execute(
     `INSERT INTO "${ACTIVE_TRANSACTIONS_TABLE}" (
+      "clientId",
       "transactionId",
       "mutationName",
       "argsJson",
@@ -100,8 +110,9 @@ export async function upsertActiveTransaction(
       "invalidationsJson",
       "createdAt",
       "updatedAt"
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT("transactionId") DO UPDATE SET
+      "clientId" = excluded."clientId",
       "mutationName" = excluded."mutationName",
       "argsJson" = excluded."argsJson",
       "localResultJson" = excluded."localResultJson",
@@ -109,6 +120,7 @@ export async function upsertActiveTransaction(
       "invalidationsJson" = excluded."invalidationsJson",
       "updatedAt" = excluded."updatedAt";`,
     [
+      record.clientId,
       record.transactionId,
       record.mutationName,
       serializePrototypeJson(record.args),
@@ -123,9 +135,11 @@ export async function upsertActiveTransaction(
 
 export async function listActiveTransactions(
   database: AsyncSqliteDatabase,
+  clientId?: string,
 ): Promise<ActiveTransactionRecord[]> {
   await ensurePrototypeLocalStateTables(database)
   const rows = await database.query<{
+    clientId: string | null
     transactionId: string
     mutationName: string
     argsJson: string
@@ -137,10 +151,13 @@ export async function listActiveTransactions(
   }>(
     `SELECT *
      FROM "${ACTIVE_TRANSACTIONS_TABLE}"
+     ${clientId ? 'WHERE "clientId" = ?' : ''}
      ORDER BY "createdAt" ASC;`,
+    clientId ? [clientId] : [],
   )
 
   return rows.map((row) => ({
+    clientId: row.clientId ?? '',
     transactionId: row.transactionId,
     mutationName: row.mutationName,
     args: parsePrototypeJson(row.argsJson),
@@ -266,10 +283,11 @@ export async function removeOfflineQueueEntry(
 export async function getProtectedRowKeySet(
   database: AsyncSqliteDatabase,
   tableName: PrototypeTableName,
+  clientId?: string,
 ): Promise<Set<string>> {
   await ensurePrototypeLocalStateTables(database)
   const protectedKeys = new Set<string>()
-  const activeTransactions = await listActiveTransactions(database)
+  const activeTransactions = await listActiveTransactions(database, clientId)
   const offlineQueue = await listOfflineQueueEntries(database)
 
   for (const record of [...activeTransactions, ...offlineQueue]) {
@@ -290,8 +308,9 @@ export async function getProtectedRowKeySet(
 export async function readPrototypeSyncSnapshot(
   database: AsyncSqliteDatabase,
   base: Omit<PrototypeSyncSnapshot, 'activeTransactions' | 'offlineQueue' | 'conflicts'>,
+  clientId?: string,
 ): Promise<PrototypeSyncSnapshot> {
-  const activeTransactions = await listActiveTransactions(database)
+  const activeTransactions = await listActiveTransactions(database, clientId)
   const offlineQueue = await listOfflineQueueEntries(database)
 
   return {

@@ -1,5 +1,5 @@
 import type { Id, ObjectKey, ObjectRow } from '../generated/schema.gen.ts'
-import { invalidationTouchesTable, objectRowBelongsToActor, reconcileScopedRows } from '../prototype/helpers.ts'
+import { invalidationTouchesTable, objectRowBelongsToActor, readLocalRowsForTable, reconcileScopedRows } from '../prototype/helpers.ts'
 import type { QueryDefinition } from '../prototype/types.ts'
 
 export interface ListObjectsByActorArgs {
@@ -16,7 +16,7 @@ export const listObjectsByActorQuery = {
   name: 'objects.listByActor',
   tables: ['objects'],
   async readLocal(context, args) {
-    const rows = await context.collections.objects.utils.readAll()
+    const rows = readLocalRowsForTable(context.collections, 'objects')
     return (rows as ObjectRow[]).filter((row) =>
       objectRowBelongsToActor(row, args.actorId),
     )
@@ -42,7 +42,7 @@ export const getObjectByIdQuery = {
   name: 'objects.getById',
   tables: ['objects'],
   async readLocal(context, args) {
-    const rows = await context.collections.objects.utils.readAll()
+    const rows = readLocalRowsForTable(context.collections, 'objects')
     return (
       (rows as ObjectRow[]).find(
         (row) => row._actor === args.actorId && row._id === args.objectId,

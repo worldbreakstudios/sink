@@ -151,6 +151,7 @@ export interface OfflineQueueEntry<TArgs = unknown, TResult = unknown> {
 }
 
 export interface ActiveTransactionRecord<TResult = unknown, TArgs = unknown> {
+  clientId: string
   transactionId: string
   mutationName: string
   args: TArgs
@@ -272,6 +273,7 @@ export interface PrototypeSyncSnapshot {
 }
 
 export type MutablePrototypeCollection = {
+  toArray: AnyRow[]
   insert(row: AnyRow): void
   update(key: AnyKey, updater: (draft: Record<string, unknown>) => void): void
   delete(key: AnyKey): void

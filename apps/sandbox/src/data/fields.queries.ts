@@ -1,5 +1,5 @@
 import type { FieldRow, Id } from './generated/schema.gen.ts'
-import { fieldRowBelongsToObject, invalidationTouchesTable, reconcileScopedRows } from './prototype/helpers.ts'
+import { fieldRowBelongsToObject, invalidationTouchesTable, readLocalRowsForTable, reconcileScopedRows } from './prototype/helpers.ts'
 import type { QueryDefinition } from './prototype/types.ts'
 
 export interface ListFieldsByObjectArgs {
@@ -12,7 +12,7 @@ export const listFieldsByObjectQuery = {
   name: 'fields.listByObject',
   tables: ['fields'],
   async readLocal(context, args) {
-    const rows = await context.collections.fields.utils.readAll()
+    const rows = readLocalRowsForTable(context.collections, 'fields')
     return (rows as FieldRow[]).filter((row) =>
       fieldRowBelongsToObject(row, args.actorId, args.objectId),
     )

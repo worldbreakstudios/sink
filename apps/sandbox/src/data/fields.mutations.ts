@@ -1,6 +1,6 @@
 import type { FieldKey, FieldRow, Id } from './generated/schema.gen.ts'
 import { createFieldRow } from './prototype/repository.ts'
-import { createUniqueLockTarget } from './prototype/helpers.ts'
+import { createUniqueLockTarget, readLocalRowsForTable } from './prototype/helpers.ts'
 import { prototypeValuesEqual } from './prototype/json.ts'
 import type { MutationDefinition } from './prototype/types.ts'
 
@@ -32,7 +32,7 @@ export const upsertFieldByObjectTypeMutation = {
     ]
   },
   async applyLocal(context, args) {
-    const currentRows = await context.collections.fields.utils.readAll()
+    const currentRows = readLocalRowsForTable(context.collections, 'fields')
     const existingRow = (currentRows as FieldRow[]).find(
       (row) =>
         row._actor === args.actorId &&

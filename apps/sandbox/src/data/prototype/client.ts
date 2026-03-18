@@ -4,7 +4,6 @@ import {
   enqueueOfflineMutation,
   ensurePrototypeLocalStateTables,
   findOfflineQueueEntry,
-  getPrototypeClientId,
   getProtectedRowKeySet,
   listActiveTransactions,
   listOfflineQueueEntries,
@@ -88,7 +87,7 @@ export function createPrototypeSyncClient(
   const pendingFinalizations = new Map<string, Deferred<PrototypeServerMessage>>()
   const pendingTransactions = new Map<string, PendingTransactionContext>()
 
-  let clientId = ''
+  const clientId = crypto.randomUUID()
   let started = false
   let stopped = false
   let socket: PrototypeSocketLike | null = null
@@ -148,7 +147,7 @@ export function createPrototypeSyncClient(
       connection: snapshot.connection,
       lastError: snapshot.lastError,
       lastInvalidationAt: snapshot.lastInvalidationAt,
-    })
+    }, clientId)
     notify()
   }
 
@@ -199,7 +198,6 @@ export function createPrototypeSyncClient(
     }
     notify()
 
-    clientId = await getPrototypeClientId(options.database)
     await refreshSnapshot()
     await recoverActiveTransactions()
     await refreshAllQueries()
@@ -287,7 +285,7 @@ export function createPrototypeSyncClient(
   }
 
   async function recoverActiveTransactions(): Promise<void> {
-    const activeTransactions = await listActiveTransactions(options.database)
+    const activeTransactions = await listActiveTransactions(options.database, clientId)
 
     for (const record of activeTransactions) {
       const definition = prototypeMutations[record.mutationName]
@@ -543,7 +541,7 @@ export function createPrototypeSyncClient(
       collections: options.collections,
       createBatchTransaction,
       getProtectedRowKeys: (tableName: PrototypeTableName) =>
-        getProtectedRowKeySet(options.database, tableName),
+        getProtectedRowKeySet(options.database, tableName, clientId),
     }
     const localResult = await definition.readLocal(localContext, args)
 
@@ -577,7 +575,6 @@ export function createPrototypeSyncClient(
     args: TArgs,
   ): Promise<TLocalResult | TServerResult> {
     await ensurePrototypeLocalStateTables(options.database)
-    clientId = await getPrototypeClientId(options.database)
 
     if (!isSocketConnected()) {
       return executeOfflineMutation(definition, args)
@@ -604,13 +601,14 @@ export function createPrototypeSyncClient(
       collections: options.collections,
       createBatchTransaction,
       getProtectedRowKeys: (tableName: PrototypeTableName) =>
-        getProtectedRowKeySet(options.database, tableName),
+        getProtectedRowKeySet(options.database, tableName, clientId),
       transaction,
     }
     const localResult = await definition.applyLocal(localContext, args)
     const invalidations = definition.invalidate(args, localResult)
 
     await upsertActiveTransaction(options.database, {
+      clientId,
       transactionId,
       mutationName: definition.name,
       args,
@@ -663,7 +661,7 @@ export function createPrototypeSyncClient(
       collections: options.collections,
       createBatchTransaction,
       getProtectedRowKeys: (tableName: PrototypeTableName) =>
-        getProtectedRowKeySet(options.database, tableName),
+        getProtectedRowKeySet(options.database, tableName, clientId),
       transaction,
     }
     const localResult = await definition.applyLocal(localContext, args)
@@ -815,12 +813,15 @@ export function createPrototypeSyncClient(
     }
 
     for (const deferred of pendingOpenRequests.values()) {
+      void deferred.promise.catch(() => {})
       deferred.reject(new Error('Prototype sync client stopped.'))
     }
     for (const deferred of pendingStatusRequests.values()) {
+      void deferred.promise.catch(() => {})
       deferred.reject(new Error('Prototype sync client stopped.'))
     }
     for (const deferred of pendingFinalizations.values()) {
+      void deferred.promise.catch(() => {})
       deferred.reject(new Error('Prototype sync client stopped.'))
     }
 

@@ -112,11 +112,11 @@ export function createUniqueLockTarget(
   }
 }
 
-export async function readLocalRowsForTable(
+export function readLocalRowsForTable(
   collections: SchemaCollections,
   tableName: PrototypeTableName,
-): Promise<AnyRow[]> {
-  return getPrototypeCollection(collections, tableName).utils.readAll()
+): AnyRow[] {
+  return [...getPrototypeCollection(collections, tableName).toArray]
 }
 
 export async function reconcileScopedRows(
@@ -126,10 +126,10 @@ export async function reconcileScopedRows(
   scope: (row: PrototypeRow) => boolean,
 ): Promise<void> {
   const protectedKeys = await context.getProtectedRowKeys(tableName)
-  const currentRows = (await readLocalRowsForTable(
+  const currentRows = readLocalRowsForTable(
     context.collections,
     tableName,
-  )) as PrototypeRow[]
+  ) as PrototypeRow[]
   const currentScopedRows = currentRows.filter(scope)
   const nextByKey = new Map(
     nextRows.map((row) => [serializePrototypeKey(tableName, getPrototypeRowKey(tableName, row)), row]),

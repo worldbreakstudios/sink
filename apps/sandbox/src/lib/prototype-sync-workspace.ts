@@ -29,7 +29,7 @@ export async function createPrototypeSyncWorkspace(): Promise<PrototypeSyncWorks
   }
 }
 
-function resolvePrototypeServerUrl(): string {
+export function resolvePrototypeServerUrl(): string {
   return import.meta.env.VITE_SINK_SERVER_URL?.trim() || 'http://127.0.0.1:3001'
 }
 

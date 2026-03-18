@@ -1,6 +1,6 @@
 import type { Id, ObjectRow } from '../generated/schema.gen.ts'
 import { createObjectRow } from '../prototype/repository.ts'
-import { createPrimaryLockTarget } from '../prototype/helpers.ts'
+import { createPrimaryLockTarget, readLocalRowsForTable } from '../prototype/helpers.ts'
 import { prototypeValuesEqual } from '../prototype/json.ts'
 import type { MutationDefinition } from '../prototype/types.ts'
 
@@ -98,7 +98,7 @@ export const changeObjectTypeMutation = {
     ]
   },
   async applyLocal(context, args) {
-    const currentRows = await context.collections.objects.utils.readAll()
+    const currentRows = readLocalRowsForTable(context.collections, 'objects')
     const currentRow = (currentRows as ObjectRow[]).find(
       (row) => row._actor === args.actorId && row._id === args.objectId,
     )

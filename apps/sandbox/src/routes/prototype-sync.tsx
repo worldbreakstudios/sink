@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import { Badge } from '@/components/ui/badge'
@@ -17,8 +17,10 @@ import { listObjectsByActorQuery } from '@/data/objects/objects.queries'
 import type { FieldRow, Id, ObjectRow, ObjectTypeRow } from '@/data/generated/schema.gen'
 import {
   createPrototypeSyncWorkspace,
+  resolvePrototypeServerUrl,
   type PrototypeSyncWorkspace,
 } from '@/lib/prototype-sync-workspace'
+import { hardClearSqliteDemoLocalDatabase } from '@/lib/sqlite-demo-collections'
 
 const emptySyncSnapshot: PrototypeSyncSnapshot = {
   connection: 'stopped',
@@ -47,6 +49,10 @@ function PrototypeSyncPage() {
   const [newObjectTypeId, setNewObjectTypeId] = useState<Id<'objectTypes'> | ''>('')
   const [fieldDrafts, setFieldDrafts] = useState<Record<string, FieldDraft>>({})
   const [actionError, setActionError] = useState<string | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
+  const [isClearingLocal, setIsClearingLocal] = useState(false)
+  const [isResettingServer, setIsResettingServer] = useState(false)
+  const workspaceRef = useRef<PrototypeSyncWorkspace | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -54,22 +60,35 @@ function PrototypeSyncPage() {
     createPrototypeSyncWorkspace()
       .then((nextWorkspace) => {
         if (cancelled) {
-          void nextWorkspace.close()
+          void nextWorkspace.close().catch((error) => {
+            if (!isExpectedShutdownError(error)) {
+              console.error(error)
+            }
+          })
           return
         }
 
+        workspaceRef.current = nextWorkspace
         setWorkspace(nextWorkspace)
       })
       .catch((error: unknown) => {
-        setLoadingError(error instanceof Error ? error.message : String(error))
+        if (!cancelled) {
+          setLoadingError(error instanceof Error ? error.message : String(error))
+        }
       })
 
     return () => {
       cancelled = true
-      setWorkspace((current) => {
-        current?.close().catch(console.error)
-        return null
-      })
+      const currentWorkspace = workspaceRef.current
+      workspaceRef.current = null
+
+      if (currentWorkspace) {
+        void currentWorkspace.close().catch((error) => {
+          if (!isExpectedShutdownError(error)) {
+            console.error(error)
+          }
+        })
+      }
     }
   }, [])
 
@@ -105,36 +124,19 @@ function PrototypeSyncPage() {
     [fieldTypesCollection as never],
   )
 
-  const actors = useMemo(
-    () => (actorsQuery.data ?? []) as Array<{ _id: Id<'actors'> }>,
-    [actorsQuery.data],
+  const actors = (actorsQuery.data ?? []) as Array<{ _id: Id<'actors'> }>
+  const objectTypes = (objectTypesQuery.data ?? []) as ObjectTypeRow[]
+  const objects = ((objectsQuery.data ?? []) as ObjectRow[]).filter((row) =>
+    selectedActorId === '' ? false : row._actor === selectedActorId,
   )
-  const objectTypes = useMemo(
-    () => (objectTypesQuery.data ?? []) as ObjectTypeRow[],
-    [objectTypesQuery.data],
+  const fields = ((fieldsQuery.data ?? []) as FieldRow[]).filter((row) =>
+    selectedActorId === '' ? false : row._actor === selectedActorId,
   )
-  const objects = useMemo(
-    () =>
-      ((objectsQuery.data ?? []) as ObjectRow[]).filter((row) =>
-        selectedActorId === '' ? false : row._actor === selectedActorId,
-      ),
-    [objectsQuery.data, selectedActorId],
-  )
-  const fields = useMemo(
-    () =>
-      ((fieldsQuery.data ?? []) as FieldRow[]).filter((row) =>
-        selectedActorId === '' ? false : row._actor === selectedActorId,
-      ),
-    [fieldsQuery.data, selectedActorId],
-  )
-  const fieldTypes = useMemo(
-    () =>
-      (fieldTypesQuery.data ?? []) as Array<{
-        _id: Id<'fieldTypes'>
-        name: string
-      }>,
-    [fieldTypesQuery.data],
-  )
+  const fieldTypes = (fieldTypesQuery.data ?? []) as Array<{
+    _id: Id<'fieldTypes'>
+    name: string
+  }>
+  const watchedObjectIds = objects.map((objectRow) => objectRow._id).join('|')
 
   useEffect(() => {
     if (selectedActorId === '' && actors[0]?._id) {
@@ -185,7 +187,7 @@ function PrototypeSyncPage() {
         dispose()
       }
     }
-  }, [objects, selectedActorId, workspace])
+  }, [selectedActorId, watchedObjectIds, workspace])
 
   const handleCreateObject = async () => {
     if (!workspace || selectedActorId === '' || newObjectTypeId === '') {
@@ -293,6 +295,86 @@ function PrototypeSyncPage() {
     }
   }
 
+  const handleHardClearLocal = async () => {
+    const confirmed = window.confirm(
+      'Hard clear the local sandbox database and reload this page? This only removes browser-local data. If it fails, close other sandbox tabs and try again.',
+    )
+
+    if (!confirmed || isClearingLocal) {
+      return
+    }
+
+    setIsClearingLocal(true)
+    setActionError(null)
+    setLoadingError(null)
+    setResetError(null)
+
+    const currentWorkspace = workspaceRef.current
+
+    try {
+      if (currentWorkspace) {
+        await currentWorkspace.close().catch((error) => {
+          if (!isExpectedShutdownError(error)) {
+            throw error
+          }
+        })
+        workspaceRef.current = null
+        setWorkspace(null)
+      }
+
+      await hardClearSqliteDemoLocalDatabase()
+      window.location.reload()
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : String(error))
+
+      if (!workspaceRef.current) {
+        try {
+          const reopenedWorkspace = await createPrototypeSyncWorkspace()
+          workspaceRef.current = reopenedWorkspace
+          setWorkspace(reopenedWorkspace)
+        } catch (reopenError) {
+          setLoadingError(
+            reopenError instanceof Error ? reopenError.message : String(reopenError),
+          )
+        }
+      }
+
+      setIsClearingLocal(false)
+    }
+  }
+
+  const handleHardResetServer = async () => {
+    const confirmed = window.confirm(
+      'Hard reset the demo server database back to the seeded state and reload this page?',
+    )
+
+    if (!confirmed || isResettingServer) {
+      return
+    }
+
+    setIsResettingServer(true)
+    setActionError(null)
+    setResetError(null)
+
+    try {
+      const response = await fetch(
+        new URL('/api/reset-demo', resolvePrototypeServerUrl()).toString(),
+        {
+          method: 'POST',
+        },
+      )
+
+      if (!response.ok) {
+        throw new Error(`Server reset failed with ${response.status}.`)
+      }
+
+      window.location.reload()
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : String(error))
+      setIsResettingServer(false)
+    }
+  }
+
   if (loadingError) {
     return (
       <main className="page-wrap py-8">
@@ -301,6 +383,33 @@ function PrototypeSyncPage() {
             <CardTitle>Prototype Sync</CardTitle>
             <CardDescription>{loadingError}</CardDescription>
           </CardHeader>
+          <CardContent className="space-y-3">
+            {resetError && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {resetError}
+              </div>
+            )}
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardClearLocal()
+              }}
+            >
+              {isClearingLocal ? 'Clearing Local DB…' : 'Hard Clear Local DB'}
+            </Button>
+            <Button
+              variant="outline"
+              className="border-orange-300 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardResetServer()
+              }}
+            >
+              {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
+            </Button>
+          </CardContent>
         </Card>
       </main>
     )
@@ -314,6 +423,33 @@ function PrototypeSyncPage() {
             <CardTitle>Prototype Sync</CardTitle>
             <CardDescription>Loading local workspace and manual sync client…</CardDescription>
           </CardHeader>
+          <CardContent className="space-y-3">
+            {resetError && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {resetError}
+              </div>
+            )}
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardClearLocal()
+              }}
+            >
+              {isClearingLocal ? 'Clearing Local DB…' : 'Hard Clear Local DB'}
+            </Button>
+            <Button
+              variant="outline"
+              className="border-orange-300 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardResetServer()
+              }}
+            >
+              {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
+            </Button>
+          </CardContent>
         </Card>
       </main>
     )
@@ -334,6 +470,26 @@ function PrototypeSyncPage() {
           </Badge>
           <Badge variant="outline">active {syncSnapshot.activeTransactions}</Badge>
           <Badge variant="outline">queue {syncSnapshot.offlineQueue}</Badge>
+          <Button
+            variant="outline"
+            className="border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+            disabled={isClearingLocal || isResettingServer}
+            onClick={() => {
+              void handleHardClearLocal()
+            }}
+          >
+            {isClearingLocal ? 'Clearing Local DB…' : 'Hard Clear Local DB'}
+          </Button>
+          <Button
+            variant="outline"
+            className="border-orange-300 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+            disabled={isClearingLocal || isResettingServer}
+            onClick={() => {
+              void handleHardResetServer()
+            }}
+          >
+            {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
+          </Button>
           <Link
             to="/"
             className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
@@ -343,10 +499,10 @@ function PrototypeSyncPage() {
         </div>
       </div>
 
-      {(actionError || syncSnapshot.lastError) && (
+      {(actionError || resetError || syncSnapshot.lastError) && (
         <Card className="border-amber-300">
           <CardContent className="pt-6 text-sm text-amber-900">
-            {actionError ?? syncSnapshot.lastError}
+            {actionError ?? resetError ?? syncSnapshot.lastError}
           </CardContent>
         </Card>
       )}
@@ -587,5 +743,18 @@ function PrototypeSyncPage() {
         </div>
       </div>
     </main>
+  )
+}
+
+function isExpectedShutdownError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.message.includes('Shared OPFS database closed') ||
+    error.message.includes('Shared OPFS database worker closed') ||
+    error.message.includes('Shared OPFS database is closed') ||
+    error.message.includes('Prototype sync client stopped.')
   )
 }

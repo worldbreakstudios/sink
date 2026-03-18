@@ -20,6 +20,9 @@ const config = defineConfig({
     exclude: ['@sqlite.org/sqlite-wasm'],
     include: ['@tanstack/db'],
   },
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: {
       '@sink/lib': fileURLToPath(new URL('../../packages/lib/src/index.ts', import.meta.url)),

@@ -20,6 +20,7 @@ import type { AsyncSqliteDatabase } from '@sink/lib'
 
 const DEFAULT_WEBSOCKET_PATH = '/ws/transactions'
 const DEFAULT_QUERY_PATH = '/api/query'
+const DEFAULT_RESET_PATH = '/api/reset-demo'
 const LOCK_LEASE_MS = 15_000
 
 export interface CreatePrototypeServerOptions {
@@ -28,6 +29,8 @@ export interface CreatePrototypeServerOptions {
   hostname?: string
   websocketPath?: string
   queryPath?: string
+  resetPath?: string
+  resetDemo?: () => Promise<InvalidationTarget[]>
   onError?: (error: unknown) => void
 }
 
@@ -47,6 +50,7 @@ export async function createPrototypeServer(
   const WebSocket = websocketModule.WebSocket
   const websocketPath = options.websocketPath ?? DEFAULT_WEBSOCKET_PATH
   const queryPath = options.queryPath ?? DEFAULT_QUERY_PATH
+  const resetPath = options.resetPath ?? DEFAULT_RESET_PATH
 
   const httpServer = createServer((request, response) => {
     void handleHttpRequest(request, response).catch((error) => {
@@ -129,6 +133,17 @@ export async function createPrototypeServer(
         payload.args as never,
       )
       writeJson(response, 200, { result })
+      return
+    }
+
+    if (
+      request.method === 'POST' &&
+      request.url === resetPath &&
+      options.resetDemo
+    ) {
+      const invalidations = await options.resetDemo()
+      broadcastInvalidations(null, invalidations)
+      writeJson(response, 200, { ok: true, invalidations })
       return
     }
 
@@ -372,11 +387,11 @@ export async function createPrototypeServer(
   }
 
   function broadcastInvalidations(
-    sender: ServerSocketLike,
+    sender: ServerSocketLike | null,
     invalidations: InvalidationTarget[],
   ): void {
     for (const socket of sockets) {
-      if (socket === sender || socket.readyState !== WebSocket.OPEN) {
+      if ((sender !== null && socket === sender) || socket.readyState !== WebSocket.OPEN) {
         continue
       }
 

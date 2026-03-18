@@ -1,6 +1,6 @@
 import type { ObjectTypeRow } from './generated/schema.gen.ts'
 import { type QueryDefinition } from './prototype/types.ts'
-import { invalidationTouchesTable, normalizeObjectTypeRows, reconcileScopedRows } from './prototype/helpers.ts'
+import { invalidationTouchesTable, normalizeObjectTypeRows, readLocalRowsForTable, reconcileScopedRows } from './prototype/helpers.ts'
 
 export interface ListObjectTypesArgs {}
 
@@ -9,7 +9,7 @@ export const listObjectTypesQuery = {
   name: 'objectTypes.listAll',
   tables: ['objectTypes'],
   async readLocal(context) {
-    const rows = await context.collections.objectTypes.utils.readAll()
+    const rows = readLocalRowsForTable(context.collections, 'objectTypes')
     return normalizeObjectTypeRows(rows as ObjectTypeRow[])
   },
   async runServer(context) {
