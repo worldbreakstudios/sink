@@ -1,22 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { discoverSchemaFiles, resolveOutputPath, resolveServerOutputPath } from './discover'
+import { discoverSchemaFiles, resolveOutputPath } from './discover'
 import { loadSchemaFiles } from './load-schema'
 import { emit } from './emit'
-import { emitServer } from './emit-server'
 
 export interface GenerateOptions {
   cwd: string
   out?: string
-  serverOut?: string
 }
 
 export async function generate(options: GenerateOptions): Promise<void> {
   const srcDir = path.resolve(options.cwd, 'src')
   const outputPath = resolveOutputPath(options.cwd, options.out)
-  const serverOutputPath = options.serverOut
-    ? resolveServerOutputPath(options.cwd, options.serverOut)
-    : null
 
   const files = await discoverSchemaFiles(srcDir)
   if (files.length === 0) {
@@ -36,29 +31,8 @@ export async function generate(options: GenerateOptions): Promise<void> {
     fs.writeFileSync(gitignorePath, '*\n', 'utf-8')
   }
 
-  const outputs = [path.relative(options.cwd, outputPath)]
-
-  if (serverOutputPath) {
-    const relativeImportPath = toImportPath(
-      path.relative(path.dirname(serverOutputPath), outputPath),
-      { preserveTsExtension: true },
-    )
-    const serverCode = emitServer(relativeImportPath)
-    const serverOutputDir = path.dirname(serverOutputPath)
-
-    fs.mkdirSync(serverOutputDir, { recursive: true })
-    fs.writeFileSync(serverOutputPath, serverCode, 'utf-8')
-
-    const serverGitignorePath = path.join(serverOutputDir, '.gitignore')
-    if (!fs.existsSync(serverGitignorePath)) {
-      fs.writeFileSync(serverGitignorePath, '*\n', 'utf-8')
-    }
-
-    outputs.push(path.relative(options.cwd, serverOutputPath))
-  }
-
   console.log(
-    `Generated schema for ${definitions.length} table${definitions.length === 1 ? '' : 's'} -> ${outputs.join(', ')}`,
+    `Generated schema for ${definitions.length} table${definitions.length === 1 ? '' : 's'} -> ${path.relative(options.cwd, outputPath)}`,
   )
 }
 
@@ -92,18 +66,4 @@ export async function watch(options: GenerateOptions): Promise<void> {
     watcher.close()
     process.exit(0)
   })
-}
-
-function toImportPath(
-  relativePath: string,
-  options: { preserveTsExtension?: boolean } = {},
-): string {
-  const normalizedPath = relativePath
-    .replace(
-      options.preserveTsExtension ? /\.(cts|mts|js|jsx)$/ : /\.(cts|mts|ts|tsx|js|jsx)$/,
-      '',
-    )
-    .split(path.sep)
-    .join('/')
-  return normalizedPath.startsWith('.') ? normalizedPath : `./${normalizedPath}`
 }

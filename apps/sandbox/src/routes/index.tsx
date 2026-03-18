@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import { HotkeysProvider } from '@tanstack/react-hotkeys'
 import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot } from '@sink/lib'
@@ -495,6 +495,12 @@ function App() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            to="/prototype-sync"
+            className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+          >
+            Manual Sync Prototype
+          </Link>
           {!rightSidebarOpen && selectedTable && (
             <Button
               variant="ghost"

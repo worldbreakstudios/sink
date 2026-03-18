@@ -22,10 +22,6 @@ import {
 } from "@tanstack/db";
 import type { SqlValue } from "@sqlite.org/sqlite-wasm";
 import type { LocalOnlyCollectionUtils } from "@tanstack/db";
-import {
-  appendSqliteMutationEventsToLog,
-  ensureSqliteSyncTables,
-} from "./sqlite-sync-core";
 import type { SqliteMutationOrigin } from "./sqlite-sync-core";
 import type {
   AsyncSqliteDatabase,
@@ -1342,7 +1338,6 @@ async function persistSqliteMutations<TRow extends object>(
 ): Promise<SqliteMutationEvent[]> {
   const mutationEvents: SqliteMutationEvent[] = [];
 
-  await ensureSqliteSyncTables(options.database);
   await options.database.execute("BEGIN");
 
   try {
@@ -1358,7 +1353,6 @@ async function persistSqliteMutations<TRow extends object>(
       );
     }
 
-    await appendSqliteMutationEventsToLog(options.database, mutationEvents);
     await options.database.execute("COMMIT");
     return mutationEvents;
   } catch (error) {
