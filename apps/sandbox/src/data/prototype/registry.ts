@@ -1,7 +1,9 @@
-import { listFieldsByObjectQuery } from '../fields.queries.ts'
-import { upsertFieldByObjectTypeMutation } from '../fields.mutations.ts'
-import { listObjectTypesQuery } from '../objectTypes.queries.ts'
-import { renameObjectTypeMutation } from '../objectTypes.mutations.ts'
+import { upsertFieldByObjectTypeMutation } from '../fields/fields.mutations.ts'
+import { listFieldsByObjectQuery } from '../fields/fields.queries.ts'
+import {
+  renameObjectTypeMutation,
+} from '../objectTypes/objectTypes.mutations.ts'
+import { listObjectTypesQuery } from '../objectTypes/objectTypes.queries.ts'
 import {
   changeObjectTypeMutation,
   createObjectMutation,

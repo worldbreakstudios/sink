@@ -1,6 +1,11 @@
-import type { FieldRow, Id } from './generated/schema.gen.ts'
-import { fieldRowBelongsToObject, invalidationTouchesTable, readLocalRowsForTable, reconcileScopedRows } from './prototype/helpers.ts'
-import type { QueryDefinition } from './prototype/types.ts'
+import type { FieldRow, Id } from '../generated/schema.gen.ts'
+import {
+  fieldRowBelongsToObject,
+  invalidationTouchesTable,
+  readLocalRowsForTable,
+  reconcileScopedRows,
+} from '../prototype/helpers.ts'
+import type { QueryDefinition } from '../prototype/types.ts'
 
 export interface ListFieldsByObjectArgs {
   actorId: Id<'actors'>
