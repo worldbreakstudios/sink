@@ -8,7 +8,6 @@ import type {
   SharedSqliteMethodResult,
 } from '../lib/shared-opfs-protocol.ts'
 import { serializeWorkerError } from '../lib/shared-opfs-protocol.ts'
-const SHARED_OPFS_DEBUG = import.meta.env.DEV
 
 const workerScope = globalThis as unknown as {
   addEventListener(
@@ -24,20 +23,10 @@ let operationQueue: Promise<void> = Promise.resolve()
 
 workerScope.addEventListener('message', (event: MessageEvent<DedicatedWorkerRequest>) => {
   const message = event.data
-  debugWorker('message:received', {
-    requestId: message.requestId,
-    type: message.type,
-    activeFilename,
-  })
 
   operationQueue = operationQueue
     .then(() => handleMessage(message))
     .catch((error) => {
-      debugWorker('message:error', {
-        requestId: message.requestId,
-        type: message.type,
-        error: getErrorMessage(error),
-      })
       postResponse({
         type: 'response',
         requestId: message.requestId,
@@ -50,15 +39,7 @@ workerScope.addEventListener('message', (event: MessageEvent<DedicatedWorkerRequ
 async function handleMessage(message: DedicatedWorkerRequest): Promise<void> {
   switch (message.type) {
     case 'open': {
-      debugWorker('open:start', {
-        requestId: message.requestId,
-        filename: message.filename,
-      })
       if (database && activeFilename === message.filename) {
-        debugWorker('open:reused-existing-db', {
-          requestId: message.requestId,
-          filename: message.filename,
-        })
         postResponse({
           type: 'response',
           requestId: message.requestId,
@@ -71,10 +52,6 @@ async function handleMessage(message: DedicatedWorkerRequest): Promise<void> {
       await closeDatabase()
       database = await OpfsDatabase.create(message.filename)
       activeFilename = message.filename
-      debugWorker('open:success', {
-        requestId: message.requestId,
-        filename: message.filename,
-      })
       postResponse({
         type: 'response',
         requestId: message.requestId,
@@ -84,14 +61,7 @@ async function handleMessage(message: DedicatedWorkerRequest): Promise<void> {
       return
     }
     case 'close': {
-      debugWorker('close:start', {
-        requestId: message.requestId,
-        filename: activeFilename,
-      })
       await closeDatabase()
-      debugWorker('close:success', {
-        requestId: message.requestId,
-      })
       postResponse({
         type: 'response',
         requestId: message.requestId,
@@ -101,15 +71,7 @@ async function handleMessage(message: DedicatedWorkerRequest): Promise<void> {
       return
     }
     case 'call': {
-      debugWorker('call:start', {
-        requestId: message.requestId,
-        method: message.method,
-      })
       const result = await callDatabaseMethod(message.method, message.args)
-      debugWorker('call:success', {
-        requestId: message.requestId,
-        method: message.method,
-      })
       postResponse({
         type: 'response',
         requestId: message.requestId,
@@ -175,35 +137,15 @@ async function callDatabaseMethod<TMethod extends SharedSqliteMethod>(
 async function closeDatabase(): Promise<void> {
   if (!database) {
     activeFilename = null
-    debugWorker('close:noop-no-database')
     return
   }
 
   const currentDatabase = database
   database = null
   activeFilename = null
-  debugWorker('close:database-begin')
   await currentDatabase.close()
-  debugWorker('close:database-finished')
 }
 
 function postResponse(message: DedicatedWorkerResponse): void {
   workerScope.postMessage(message)
-}
-
-function debugWorker(event: string, details?: Record<string, unknown>): void {
-  if (!SHARED_OPFS_DEBUG) {
-    return
-  }
-
-  if (details) {
-    console.debug('[shared-opfs:worker]', event, details)
-    return
-  }
-
-  console.debug('[shared-opfs:worker]', event)
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

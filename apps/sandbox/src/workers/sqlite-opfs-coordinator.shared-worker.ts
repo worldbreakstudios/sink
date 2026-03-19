@@ -13,7 +13,6 @@ const sharedScope = globalThis as unknown as {
 }
 const HEARTBEAT_INTERVAL_MS = 5_000
 const HEARTBEAT_TIMEOUT_MS = 15_000
-const SHARED_OPFS_DEBUG = import.meta.env.DEV
 
 interface ConnectedTab {
   tabId: string
@@ -49,7 +48,6 @@ sharedScope.addEventListener('connect', (event: MessageEvent) => {
     return
   }
 
-  debugCoordinator('port:connect')
   port.start()
   port.addEventListener('message', (messageEvent: MessageEvent<CoordinatorClientMessage>) => {
     handlePortMessage(port, messageEvent.data)
@@ -63,9 +61,6 @@ sharedScope.setInterval(() => {
 function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage): void {
   switch (message.type) {
     case 'register': {
-      debugCoordinator('tab:register', {
-        tabId: shortId(message.tabId),
-      })
       tabs.set(message.tabId, {
         tabId: message.tabId,
         port,
@@ -86,9 +81,6 @@ function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage)
       return
     }
     case 'unregister': {
-      debugCoordinator('tab:unregister', {
-        tabId: shortId(message.tabId),
-      })
       removeTab(message.tabId)
       return
     }
@@ -100,10 +92,6 @@ function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage)
       }
 
       tab.ready = true
-      debugCoordinator('tab:active-ready', {
-        tabId: shortId(message.tabId),
-        pendingRequests: pendingRequests.length,
-      })
       flushPendingRequests()
       return
     }
@@ -115,10 +103,6 @@ function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage)
       }
 
       tab.ready = false
-      debugCoordinator('tab:active-failed', {
-        tabId: shortId(message.tabId),
-        error: message.error.message,
-      })
       if (activeTabId === message.tabId) {
         activeTabId = null
         electActiveTab(message.tabId)
@@ -136,13 +120,6 @@ function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage)
         tab.lastSeenAt = Date.now()
       }
 
-      debugCoordinator('request:queued', {
-        tabId: shortId(message.tabId),
-        requestId: message.requestId,
-        method: message.method,
-        pendingRequests: pendingRequests.length + 1,
-        activeTabId: activeTabId ? shortId(activeTabId) : null,
-      })
       pendingRequests.push({
         requesterTabId: message.tabId,
         requestId: message.requestId,
@@ -158,19 +135,8 @@ function handlePortMessage(port: MessagePort, message: CoordinatorClientMessage)
       const requester = tabs.get(message.requesterTabId)
 
       if (!requester) {
-        debugCoordinator('response:dropped-requester-missing', {
-          requesterTabId: shortId(message.requesterTabId),
-          requestId: message.requestId,
-        })
         return
       }
-
-      debugCoordinator('response:forwarded', {
-        requestId: message.requestId,
-        requesterTabId: shortId(message.requesterTabId),
-        executorTabId: shortId(message.executorTabId),
-        ok: message.ok,
-      })
 
       const response: CoordinatorServerMessage = message.ok
         ? {
@@ -202,9 +168,6 @@ function cleanupStaleTabs(now: number): void {
   }
 
   for (const staleTabId of staleTabIds) {
-    debugCoordinator('tab:stale-removed', {
-      tabId: shortId(staleTabId),
-    })
     tabs.delete(staleTabId)
   }
 
@@ -218,9 +181,6 @@ function cleanupStaleTabs(now: number): void {
 
 function removeTab(tabId: string): void {
   tabs.delete(tabId)
-  debugCoordinator('tab:removed', {
-    tabId: shortId(tabId),
-  })
 
   if (activeTabId === tabId) {
     activeTabId = null
@@ -240,11 +200,6 @@ function electActiveTab(excludedTabId?: string): void {
     .find((tab) => tab.tabId !== excludedTabId)
 
   activeTabId = nextActiveTab?.tabId ?? null
-  debugCoordinator('tab:elected-active', {
-    activeTabId: activeTabId ? shortId(activeTabId) : null,
-    excludedTabId: excludedTabId ? shortId(excludedTabId) : null,
-    totalTabs: tabs.size,
-  })
 
   if (nextActiveTab) {
     nextActiveTab.ready = false
@@ -252,10 +207,6 @@ function electActiveTab(excludedTabId?: string): void {
 }
 
 function notifyRoles(): void {
-  debugCoordinator('roles:notify', {
-    activeTabId: activeTabId ? shortId(activeTabId) : null,
-    tabs: [...tabs.keys()].map((tabId) => shortId(tabId)),
-  })
   for (const tab of tabs.values()) {
     const message: CoordinatorServerMessage = {
       type: 'role',
@@ -268,23 +219,12 @@ function notifyRoles(): void {
 
 function flushPendingRequests(): void {
   if (!activeTabId) {
-    if (pendingRequests.length > 0) {
-      debugCoordinator('flush:blocked-no-active-tab', {
-        pendingRequests: pendingRequests.length,
-      })
-    }
     return
   }
 
   const activeTab = tabs.get(activeTabId)
 
   if (!activeTab || !activeTab.ready) {
-    if (pendingRequests.length > 0) {
-      debugCoordinator('flush:blocked-active-not-ready', {
-        activeTabId: shortId(activeTabId),
-        pendingRequests: pendingRequests.length,
-      })
-    }
     return
   }
 
@@ -301,13 +241,6 @@ function flushPendingRequests(): void {
       continue
     }
 
-    debugCoordinator('flush:dispatch', {
-      requestId: nextRequest.requestId,
-      method: nextRequest.method,
-      requesterTabId: shortId(nextRequest.requesterTabId),
-      activeTabId: shortId(activeTabId),
-      remaining: pendingRequests.length,
-    })
     const message: CoordinatorServerMessage = {
       type: 'execute-request',
       requesterTabId: nextRequest.requesterTabId,
@@ -320,10 +253,6 @@ function flushPendingRequests(): void {
 }
 
 function failPendingRequests(message: string): void {
-  debugCoordinator('flush:fail-pending', {
-    pendingRequests: pendingRequests.length,
-    message,
-  })
   while (pendingRequests.length > 0) {
     const request = pendingRequests.shift()
 
@@ -345,21 +274,4 @@ function failPendingRequests(message: string): void {
     }
     requester.port.postMessage(response)
   }
-}
-
-function debugCoordinator(event: string, details?: Record<string, unknown>): void {
-  if (!SHARED_OPFS_DEBUG) {
-    return
-  }
-
-  if (details) {
-    console.debug('[shared-opfs:coordinator]', event, details)
-    return
-  }
-
-  console.debug('[shared-opfs:coordinator]', event)
-}
-
-function shortId(value: string): string {
-  return value.slice(0, 8)
 }
