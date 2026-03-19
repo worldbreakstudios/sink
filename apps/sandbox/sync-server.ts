@@ -40,12 +40,12 @@ const server = await createGeneratedSyncServerRuntime({
     return true
   },
   onError(error) {
-    console.error('[prototype-sync-server]', error)
+    console.error('[sandbox-sync-server]', error)
   },
 })
 
 console.log(
-  `Prototype sync server listening at http://${hostname}:${port} and ws://${hostname}:${port}${websocketPath} using ${databasePath}`,
+  `Sandbox sync server listening at http://${hostname}:${port} and ws://${hostname}:${port}${websocketPath} using ${databasePath}`,
 )
 
 async function shutdown(exitCode = 0): Promise<void> {

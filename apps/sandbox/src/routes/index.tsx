@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import { HotkeysProvider } from '@tanstack/react-hotkeys'
-import type { SqliteCollection, SqliteExplorerSnapshot, SqliteIndexSnapshot } from '@sink/lib'
+import {
+  getSharedOpfsBrowserTabId,
+  type SqliteCollection,
+  type SqliteExplorerSnapshot,
+  type SqliteIndexSnapshot,
+  type SyncClientSnapshot,
+} from '@sink/lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   createSqliteDemoCollectionsWorkspace,
   getSqliteDemoRowKey,
+  hardClearSqliteDemoLocalDatabase,
+  resolveSqliteDemoServerUrl,
   serializeSqliteDemoKey,
   type SqliteDemoCollectionsWorkspace,
   type SqliteDemoId,
@@ -18,7 +26,6 @@ import type { SqliteReferenceColumn } from '@sink/lib'
 import { INDEXES, REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import {
   buildOffsetCursorInput,
-  CreateTableModal,
   DataTable,
   DeleteRowsModal,
   InsertRowModal,
@@ -35,6 +42,15 @@ export const Route = createFileRoute('/')({
   ssr: false,
   component: App,
 })
+
+const emptySyncSnapshot: SyncClientSnapshot = {
+  connection: 'stopped',
+  activeTransactions: 0,
+  offlineQueue: 0,
+  conflicts: [],
+  lastError: null,
+  lastInvalidationAt: null,
+} as const
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -62,20 +78,22 @@ function formatUnknownError(error: unknown): string {
 }
 
 function App() {
+  const browserTabId = getSharedOpfsBrowserTabId()
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
+  const workspaceRef = useRef<SqliteDemoCollectionsWorkspace | null>(null)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
     error?: string
   }>({ status: 'loading' })
   const [actionError, setActionError] = useState<string | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string>('')
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [activeQuery, setActiveQuery] = useState<QueryState | null>(null)
-  const [createTableModalOpen, setCreateTableModalOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
   const [deleteModal, setDeleteModal] = useState<{
     tableName: SqliteDemoTableName
@@ -83,6 +101,8 @@ function App() {
     keys: SqliteDemoId[]
   } | null>(null)
   const [isDeletingRows, setIsDeletingRows] = useState(false)
+  const [isClearingLocal, setIsClearingLocal] = useState(false)
+  const [isResettingServer, setIsResettingServer] = useState(false)
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -100,32 +120,54 @@ function App() {
 
   const loadDemo = useCallback(async () => {
     const nextWorkspace = await createSqliteDemoCollectionsWorkspace()
-
-    setWorkspace((currentWorkspace) => {
-      if (currentWorkspace) {
-        currentWorkspace.close().catch(console.error)
-      }
-      return nextWorkspace
-    })
+    const previousWorkspace = workspaceRef.current
+    workspaceRef.current = nextWorkspace
+    setWorkspace(nextWorkspace)
 
     setActionError(null)
+    setResetError(null)
     await refreshSnapshot(nextWorkspace)
+
+    if (previousWorkspace && previousWorkspace !== nextWorkspace) {
+      await previousWorkspace.close().catch((error) => {
+        if (!isExpectedShutdownError(error)) {
+          console.error(error)
+        }
+      })
+    }
   }, [refreshSnapshot])
 
   useEffect(() => {
+    let cancelled = false
+
     loadDemo().catch((error: unknown) => {
-      setSqliteState({
-        status: 'error',
-        error: formatUnknownError(error),
-      })
+      if (!cancelled) {
+        setSqliteState({
+          status: 'error',
+          error: formatUnknownError(error),
+        })
+      }
     })
+
+    return () => {
+      cancelled = true
+      const currentWorkspace = workspaceRef.current
+      workspaceRef.current = null
+
+      if (currentWorkspace) {
+        void currentWorkspace.close().catch((error) => {
+          if (!isExpectedShutdownError(error)) {
+            console.error(error)
+          }
+        })
+      }
+    }
   }, [loadDemo])
 
-  useEffect(() => {
-    return () => {
-      workspace?.close().catch(console.error)
-    }
-  }, [workspace])
+  const syncSnapshot = useSyncExternalStore(
+    workspace?.syncClient.subscribe ?? (() => () => {}),
+    workspace?.syncClient.getSnapshot ?? (() => emptySyncSnapshot),
+  )
 
   const tables = sqliteState.data?.tables ?? []
   const selectedTable = useMemo(
@@ -315,7 +357,6 @@ function App() {
     [insertModal?.tableName, tables],
   )
 
-
   const handleCellEdit = useCallback(
     async (rowId: SqliteDemoId, columnName: string, value: string) => {
       if (workspace === null || selectedTable === undefined) return
@@ -342,7 +383,6 @@ function App() {
     try {
       setActionError(null)
       const tableName = selectedTable.name as SqliteDemoTableName
-      const transaction = workspace.createBatchTransaction({ autoCommit: false })
       const draft = await workspace.createInsertDraft(tableName)
 
       // Pre-load reference rows for FK columns
@@ -362,7 +402,6 @@ function App() {
       setInsertModal({
         tableName,
         draft,
-        transaction,
         referenceRows,
       })
     } catch (error) {
@@ -374,31 +413,17 @@ function App() {
     if (workspace === null || insertModal === null) return
 
     try {
-      await workspace.queueInsert(
-        insertModal.tableName,
-        insertModal.draft,
-        insertModal.transaction,
-      )
-      await insertModal.transaction.commit()
+      await workspace.queueInsert(insertModal.tableName, insertModal.draft)
       await refreshSnapshot(workspace)
       setActionError(null)
       setInsertModal(null)
     } catch (error) {
       setActionError(formatUnknownError(error))
-      setInsertModal({
-        tableName: insertModal.tableName,
-        draft: insertModal.draft,
-        transaction: workspace.createBatchTransaction({ autoCommit: false }),
-        referenceRows: insertModal.referenceRows,
-      })
     }
   }, [insertModal, refreshSnapshot, workspace])
 
   const handleInsertClose = useCallback(() => {
-    setInsertModal((currentModal) => {
-      currentModal?.transaction.rollback()
-      return null
-    })
+    setInsertModal(null)
   }, [])
 
   const handleDraftChange = useCallback((columnName: string, value: string) => {
@@ -475,134 +500,259 @@ function App() {
     setActiveQuery(null)
   }, [])
 
+  const handleHardClearLocal = useCallback(async () => {
+    const confirmed = window.confirm(
+      'Hard clear the local sandbox database and reload this page? This only removes browser-local data. If it fails, close other sandbox tabs and try again.',
+    )
+
+    if (!confirmed || isClearingLocal) {
+      return
+    }
+
+    setIsClearingLocal(true)
+    setActionError(null)
+    setResetError(null)
+    setSqliteState({ status: 'loading' })
+
+    const currentWorkspace = workspaceRef.current
+
+    try {
+      if (currentWorkspace) {
+        await currentWorkspace.close().catch((error) => {
+          if (!isExpectedShutdownError(error)) {
+            throw error
+          }
+        })
+      }
+
+      workspaceRef.current = null
+      setWorkspace(null)
+      await hardClearSqliteDemoLocalDatabase()
+      window.location.reload()
+    } catch (error) {
+      setResetError(formatUnknownError(error))
+      setIsClearingLocal(false)
+      await loadDemo().catch((reloadError) => {
+        setSqliteState({
+          status: 'error',
+          error: formatUnknownError(reloadError),
+        })
+      })
+    }
+  }, [isClearingLocal, loadDemo])
+
+  const handleHardResetServer = useCallback(async () => {
+    const confirmed = window.confirm(
+      'Hard reset the demo server database back to the seeded state and reload this page?',
+    )
+
+    if (!confirmed || isResettingServer) {
+      return
+    }
+
+    setIsResettingServer(true)
+    setActionError(null)
+    setResetError(null)
+
+    try {
+      const response = await fetch(
+        new URL('/api/reset-demo', resolveSqliteDemoServerUrl()).toString(),
+        {
+          method: 'POST',
+        },
+      )
+
+      if (!response.ok) {
+        throw new Error(`Server reset failed with ${response.status}.`)
+      }
+
+      window.location.reload()
+    } catch (error) {
+      setResetError(formatUnknownError(error))
+      setIsResettingServer(false)
+    }
+  }, [isResettingServer])
+
 
   return (
     <HotkeysProvider>
-    <div className="flex h-screen flex-col bg-background">
-      {/* Top Header Bar */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm font-semibold">SQLite Sandbox</h1>
-          {workspace && (
-            <Badge variant={persistenceBadgeVariant} className="text-xs">
-              {workspace.persistenceType.toUpperCase()}
+      <div className="flex h-screen flex-col bg-background">
+        {/* Top Header Bar */}
+        <header className="flex min-h-12 shrink-0 items-center justify-between border-b px-4 py-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-sm font-semibold">SQLite Sandbox</h1>
+            {workspace && (
+              <Badge variant={persistenceBadgeVariant} className="text-xs">
+                {workspace.persistenceType.toUpperCase()}
+              </Badge>
+            )}
+            <Badge variant={syncSnapshot.connection === 'connected' ? 'default' : 'secondary'}>
+              {syncSnapshot.connection}
             </Badge>
-          )}
-          {sqliteState.data?.version && (
-            <span className="text-xs text-muted-foreground">
-              SQLite {sqliteState.data.version}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/prototype-sync"
-            className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-          >
-            Manual Sync Prototype
-          </Link>
-          {!rightSidebarOpen && selectedTable && (
+            {browserTabId && (
+              <Badge variant="outline" className="text-xs">
+                tab {browserTabId}
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-xs">
+              active {syncSnapshot.activeTransactions}
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              queue {syncSnapshot.offlineQueue}
+            </Badge>
+            {syncSnapshot.conflicts.length > 0 && (
+              <Badge variant="destructive" className="text-xs">
+                conflicts {syncSnapshot.conflicts.length}
+              </Badge>
+            )}
+            {sqliteState.data?.version && (
+              <span className="text-xs text-muted-foreground">
+                SQLite {sqliteState.data.version}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              onClick={() => setRightSidebarOpen(true)}
-              className="text-xs"
+              className="border-red-300 text-xs text-red-700 hover:bg-red-50 hover:text-red-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardClearLocal()
+              }}
             >
-              Show Schema
+              {isClearingLocal ? 'Clearing Local DB…' : 'Hard Clear Local DB'}
             </Button>
-          )}
-          <ThemeToggle />
-        </div>
-      </header>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-orange-300 text-xs text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+              disabled={isClearingLocal || isResettingServer}
+              onClick={() => {
+                void handleHardResetServer()
+              }}
+            >
+              {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
+            </Button>
+            {!rightSidebarOpen && selectedTable && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRightSidebarOpen(true)}
+                className="text-xs"
+              >
+                Show Schema
+              </Button>
+            )}
+            <ThemeToggle />
+          </div>
+        </header>
 
-      {/* Error Banner */}
-      {actionError && (
-        <div className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-          {actionError}
-        </div>
-      )}
+        {/* Error Banner */}
+        {actionError && (
+          <div className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+            {actionError}
+          </div>
+        )}
+        {resetError && (
+          <div className="shrink-0 border-b border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+            {resetError}
+          </div>
+        )}
+        {syncSnapshot.lastError && syncSnapshot.connection !== 'connected' && (
+          <div className="shrink-0 border-b border-muted bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
+            Sync status: {syncSnapshot.lastError}
+          </div>
+        )}
 
-      {/* Main Content */}
-      {sqliteState.status === 'loading' && (
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Loading SQLite collections...
-        </div>
-      )}
+        {/* Main Content */}
+        {sqliteState.status === 'loading' && (
+          <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground">
+            Loading synced SQLite workspace...
+          </div>
+        )}
 
-      {sqliteState.status === 'error' && (
-        <div className="flex flex-1 items-center justify-center text-sm text-destructive">
-          {sqliteState.error}
-        </div>
-      )}
+        {sqliteState.status === 'error' && (
+          <div className="flex flex-1 items-center justify-center px-4 text-sm text-destructive">
+            {sqliteState.error}
+          </div>
+        )}
 
-      {sqliteState.status === 'ready' && selectedTable && (
-        <div className="flex min-h-0 flex-1">
-          {/* Left Sidebar - Tables */}
-          <TableSidebar
-            tables={tables}
-            selectedTableName={selectedTable.name}
-            onSelectTable={setSelectedTableName}
-            onCreateTable={() => setCreateTableModalOpen(true)}
-          />
+        {sqliteState.status === 'ready' && selectedTable && (
+          <div className="flex min-h-0 flex-1">
+            {/* Left Sidebar - Tables */}
+            <TableSidebar
+              tables={tables}
+              selectedTableName={selectedTable.name}
+              onSelectTable={setSelectedTableName}
+            />
 
-          {/* Center - Data Table */}
-          <DataTable
-            tableName={selectedTable.name}
-            columns={selectedTable.columns}
-            rows={tableRows}
-            collections={workspace?.collections ?? null}
-            queryResult={queryResult}
-            onCellEdit={handleCellEdit}
-            onAddRow={handleAddRow}
-            onDeleteSelected={handleDeleteSelected}
-            onClearQuery={handleClearQuery}
-            onRunQuery={handleRunQuery}
-            onSelectionChange={handleSelectionChange}
-            selectedRowKeys={selectedRowKeys}
-          />
+            {/* Center - Data Table */}
+            <DataTable
+              tableName={selectedTable.name}
+              columns={selectedTable.columns}
+              rows={tableRows}
+              collections={workspace?.collections ?? null}
+              queryResult={queryResult}
+              onCellEdit={handleCellEdit}
+              onAddRow={handleAddRow}
+              onDeleteSelected={handleDeleteSelected}
+              onClearQuery={handleClearQuery}
+              onRunQuery={handleRunQuery}
+              onSelectionChange={handleSelectionChange}
+              selectedRowKeys={selectedRowKeys}
+            />
 
-          {/* Right Sidebar - Schema/Indexes/Document */}
-          <RightSidebar
-            tableName={selectedTable.name}
-            tables={tables}
-            indexes={selectedTableIndexes}
-            isOpen={rightSidebarOpen}
-            onClose={() => setRightSidebarOpen(false)}
-            selectedRows={selectedDocuments}
-            columns={selectedTable.columns}
-            referenceColumns={selectedTableReferenceColumns}
-          />
-        </div>
-      )}
+            {/* Right Sidebar - Schema/Indexes/Document */}
+            <RightSidebar
+              tableName={selectedTable.name}
+              tables={tables}
+              indexes={selectedTableIndexes}
+              isOpen={rightSidebarOpen}
+              onClose={() => setRightSidebarOpen(false)}
+              selectedRows={selectedDocuments}
+              columns={selectedTable.columns}
+              referenceColumns={selectedTableReferenceColumns}
+            />
+          </div>
+        )}
 
-      <InsertRowModal
-        modal={insertModal}
-        columns={modalTable?.columns ?? []}
-        workspace={workspace}
-        onClose={handleInsertClose}
-        onSubmit={handleInsertSubmit}
-        onDraftChange={handleDraftChange}
-      />
+        <InsertRowModal
+          modal={insertModal}
+          columns={modalTable?.columns ?? []}
+          workspace={workspace}
+          onClose={handleInsertClose}
+          onSubmit={handleInsertSubmit}
+          onDraftChange={handleDraftChange}
+        />
 
-      <CreateTableModal
-        open={createTableModalOpen}
-        onClose={() => setCreateTableModalOpen(false)}
-      />
-
-      <DeleteRowsModal
-        modal={
-          deleteModal
-            ? {
-                tableName: deleteModal.tableName,
-                count: deleteModal.count,
-              }
-            : null
-        }
-        isDeleting={isDeletingRows}
-        onClose={handleDeleteModalClose}
-        onConfirm={handleDeleteConfirm}
-      />
-    </div>
+        <DeleteRowsModal
+          modal={
+            deleteModal
+              ? {
+                  tableName: deleteModal.tableName,
+                  count: deleteModal.count,
+                }
+              : null
+          }
+          isDeleting={isDeletingRows}
+          onClose={handleDeleteModalClose}
+          onConfirm={handleDeleteConfirm}
+        />
+      </div>
     </HotkeysProvider>
+  )
+}
+
+function isExpectedShutdownError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.message.includes('Shared OPFS database closed') ||
+    error.message.includes('Shared OPFS database worker closed') ||
+    error.message.includes('Shared OPFS database is closed') ||
+    error.message.includes('Sync client stopped.')
   )
 }

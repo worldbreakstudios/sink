@@ -32,7 +32,7 @@ export function TableSidebar({
   tables: SqliteTableSnapshot[]
   selectedTableName: string
   onSelectTable: (tableName: string) => void
-  onCreateTable: () => void
+  onCreateTable?: () => void
 }) {
   return (
     <aside className="flex w-52 flex-col border-r bg-muted/30">
@@ -74,29 +74,31 @@ export function TableSidebar({
       </nav>
 
       {/* Footer */}
-      <div className="border-t p-2">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onCreateTable}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+      {onCreateTable ? (
+        <div className="border-t p-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={onCreateTable}
           >
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-          </svg>
-          <span>Create Table</span>
-        </button>
-      </div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M5 12h14" />
+              <path d="M12 5v14" />
+            </svg>
+            <span>Create Table</span>
+          </button>
+        </div>
+      ) : null}
     </aside>
   )
 }

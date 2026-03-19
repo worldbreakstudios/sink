@@ -31,14 +31,9 @@ import {
   isStructuredColumnType,
 } from './utils'
 
-type PendingInsertTransaction = ReturnType<
-  SqliteDemoCollectionsWorkspace['createBatchTransaction']
->
-
 export interface InsertModalState {
   tableName: SqliteDemoTableName
   draft: SqliteInsertDraft
-  transaction: PendingInsertTransaction
   referenceRows: Record<string, SqliteDemoRow[]>
 }
 
@@ -75,8 +70,9 @@ export function InsertRowModal({
         <DialogHeader>
           <DialogTitle>Add row to {modal.tableName}</DialogTitle>
           <DialogDescription>
-            A TanStack DB transaction is already open. Your insert will be queued and
-            committed when you submit this form.
+            This row will be inserted through the generated sync mutation pipeline.
+            If the websocket is offline, it will queue locally and replay when the
+            connection returns.
           </DialogDescription>
         </DialogHeader>
 
