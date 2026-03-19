@@ -1,10 +1,10 @@
 import type { AsyncSqliteDatabase } from '@sink/lib'
-import { createAllTables } from '../data/generated/schema.gen.ts'
 import {
-  ensurePrototypeServerTables,
-  SERVER_LOCKS_TABLE,
-  SERVER_TRANSACTIONS_TABLE,
-} from '../data/prototype/server-state.ts'
+  SYNC_SERVER_LOCKS_TABLE,
+  SYNC_SERVER_TRANSACTIONS_TABLE,
+  ensureSyncServerStateTables,
+} from '@sink/lib/server'
+import { createAllTables } from '../data/generated/schema.gen.ts'
 
 const aliceActorId = '0d3cf6b9c81d41c8b8ad84c3550d0e62'
 const bobActorId = 'c24370ab27aa4a7d9a2f6d679c5f9d08'
@@ -48,7 +48,7 @@ export async function ensureSandboxSeedData(db: AsyncSqliteDatabase): Promise<vo
 
 export async function resetSandboxSeedData(db: AsyncSqliteDatabase): Promise<void> {
   await createAllTables(db)
-  await ensurePrototypeServerTables(db)
+  await ensureSyncServerStateTables(db)
 
   await db.execute('PRAGMA foreign_keys = OFF;')
 
@@ -185,6 +185,6 @@ const SANDBOX_RESET_TABLES = [
   'objectTypes',
   'fieldTypes',
   'actors',
-  SERVER_TRANSACTIONS_TABLE,
-  SERVER_LOCKS_TABLE,
+  SYNC_SERVER_TRANSACTIONS_TABLE,
+  SYNC_SERVER_LOCKS_TABLE,
 ] as const

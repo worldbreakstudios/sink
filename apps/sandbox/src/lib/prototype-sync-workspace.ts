@@ -1,10 +1,13 @@
-import { createPrototypeSyncClient, type PrototypeSyncClient } from '@/data/prototype/client'
+import type { SyncClient } from '@sink/lib'
+import { createGeneratedSyncClient } from '@/data/generated/operations.gen'
+import { createBatchTransaction } from '@/data/generated/schema.gen'
+import type { SchemaCollections } from '@/data/generated/schema.gen'
 import type { SqliteDemoCollectionsWorkspace } from './sqlite-demo-collections'
 import { createSqliteDemoCollectionsWorkspace } from './sqlite-demo-collections'
 
 export interface PrototypeSyncWorkspace {
   base: SqliteDemoCollectionsWorkspace
-  syncClient: PrototypeSyncClient
+  syncClient: SyncClient<SchemaCollections>
   close(): Promise<void>
 }
 
@@ -12,9 +15,10 @@ export async function createPrototypeSyncWorkspace(): Promise<PrototypeSyncWorks
   const base = await createSqliteDemoCollectionsWorkspace()
   const serverBaseUrl = resolvePrototypeServerUrl()
   const websocketUrl = resolvePrototypeWebSocketUrl(serverBaseUrl)
-  const syncClient = createPrototypeSyncClient({
+  const syncClient = createGeneratedSyncClient({
     database: base.database,
     collections: base.collections,
+    createBatchTransaction,
     serverBaseUrl,
     websocketUrl,
   })

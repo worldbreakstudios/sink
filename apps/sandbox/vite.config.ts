@@ -25,6 +25,7 @@ const config = defineConfig({
   },
   resolve: {
     alias: {
+      '@sink/lib/server': fileURLToPath(new URL('../../packages/lib/src/server.ts', import.meta.url)),
       '@sink/lib': fileURLToPath(new URL('../../packages/lib/src/index.ts', import.meta.url)),
     },
     dedupe: ['@tanstack/db'],

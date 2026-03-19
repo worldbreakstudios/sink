@@ -1,7 +1,9 @@
-import { ServerSqliteDatabase } from '@sink/lib/server'
+import {
+  ServerSqliteDatabase,
+  type SyncInvalidationTarget,
+} from '@sink/lib/server'
 import { createAllTables } from './src/data/generated/schema.gen.ts'
-import type { InvalidationTarget } from './src/data/prototype/types.ts'
-import { createPrototypeServer } from './src/data/prototype/server.ts'
+import { createGeneratedSyncServerRuntime } from './src/data/generated/operations.gen.ts'
 import { ensureSandboxSeedData, resetSandboxSeedData } from './src/lib/server-seed.ts'
 
 const port = Number.parseInt(process.env.PORT ?? '3001', 10)
@@ -16,15 +18,26 @@ const database = new ServerSqliteDatabase(databasePath)
 await createAllTables(database)
 await ensureSandboxSeedData(database)
 
-const server = await createPrototypeServer({
+const server = await createGeneratedSyncServerRuntime({
   database,
   port,
   hostname,
   websocketPath,
-  resetPath,
-  async resetDemo() {
+  async handleHttpRequest(request, response) {
+    if (request.method !== 'POST' || request.url !== resetPath) {
+      return false
+    }
+
     await resetSandboxSeedData(database)
-    return DEMO_RESET_INVALIDATIONS
+    response.statusCode = 200
+    response.setHeader('Content-Type', 'application/json')
+    response.end(
+      JSON.stringify({
+        ok: true,
+        invalidations: DEMO_RESET_INVALIDATIONS,
+      }),
+    )
+    return true
   },
   onError(error) {
     console.error('[prototype-sync-server]', error)
@@ -49,7 +62,7 @@ process.on('SIGTERM', () => {
   void shutdown(0)
 })
 
-const DEMO_RESET_INVALIDATIONS: InvalidationTarget[] = [
+const DEMO_RESET_INVALIDATIONS: SyncInvalidationTarget[] = [
   {
     tableName: 'objectTypes',
     keys: [],

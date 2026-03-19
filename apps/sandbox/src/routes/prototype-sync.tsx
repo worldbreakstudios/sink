@@ -1,19 +1,27 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
+import {
+  getSharedOpfsBrowserTabId,
+  serializeSyncPayload,
+  type SyncClientSnapshot,
+} from '@sink/lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { upsertFieldByObjectTypeMutation } from '@/data/fields/fields.mutations'
-import { listFieldsByObjectQuery } from '@/data/fields/fields.queries'
-import { serializePrototypeJson } from '@/data/prototype/json'
-import type { PrototypeSyncSnapshot } from '@/data/prototype/types'
-import { listObjectTypesQuery } from '@/data/objectTypes/objectTypes.queries'
-import { changeObjectTypeMutation, createObjectMutation } from '@/data/objects/objects.mutations'
-import { listObjectsByActorQuery } from '@/data/objects/objects.queries'
+import {
+  actorsListQuery,
+  fieldsListQuery,
+  fieldsUpsertByByObjectIdFieldTypeMutation,
+  fieldTypesListQuery,
+  objectsInsertMutation,
+  objectsListQuery,
+  objectsUpdateMutation,
+  objectTypesListQuery,
+} from '@/data/generated/operations.gen'
 import type { FieldRow, Id, ObjectRow, ObjectTypeRow } from '@/data/generated/schema.gen'
 import {
   createPrototypeSyncWorkspace,
@@ -21,9 +29,8 @@ import {
   type PrototypeSyncWorkspace,
 } from '@/lib/prototype-sync-workspace'
 import { hardClearSqliteDemoLocalDatabase } from '@/lib/sqlite-demo-collections'
-import { getSharedOpfsBrowserTabId } from '@/lib/shared-opfs-database'
 
-const emptySyncSnapshot: PrototypeSyncSnapshot = {
+const emptySyncSnapshot: SyncClientSnapshot = {
   connection: 'stopped',
   activeTransactions: 0,
   offlineQueue: 0,
@@ -150,7 +157,6 @@ function PrototypeSyncPage() {
     _id: Id<'fieldTypes'>
     name: string
   }>
-  const watchedObjectIds = objects.map((objectRow) => objectRow._id).join('|')
 
   useEffect(() => {
     if (selectedActorId === '' && actors[0]?._id) {
@@ -169,39 +175,20 @@ function PrototypeSyncPage() {
       return
     }
 
-    const dispose = workspace.syncClient.watchQuery(listObjectTypesQuery, {})
-    return dispose
-  }, [workspace])
-
-  useEffect(() => {
-    if (!workspace || selectedActorId === '') {
-      return
-    }
-
-    const dispose = workspace.syncClient.watchQuery(listObjectsByActorQuery, {
-      actorId: selectedActorId,
-    })
-    return dispose
-  }, [workspace, selectedActorId])
-
-  useEffect(() => {
-    if (!workspace || selectedActorId === '') {
-      return
-    }
-
-    const disposers = objects.map((objectRow) =>
-      workspace.syncClient.watchQuery(listFieldsByObjectQuery, {
-        actorId: selectedActorId,
-        objectId: objectRow._id,
-      }),
-    )
+    const disposers = [
+      workspace.syncClient.watchQuery(actorsListQuery, {}),
+      workspace.syncClient.watchQuery(fieldTypesListQuery, {}),
+      workspace.syncClient.watchQuery(objectTypesListQuery, {}),
+      workspace.syncClient.watchQuery(objectsListQuery, {}),
+      workspace.syncClient.watchQuery(fieldsListQuery, {}),
+    ]
 
     return () => {
       for (const dispose of disposers) {
         dispose()
       }
     }
-  }, [selectedActorId, watchedObjectIds, workspace])
+  }, [workspace])
 
   const handleCreateObject = async () => {
     if (!workspace || selectedActorId === '' || newObjectTypeId === '') {
@@ -211,13 +198,14 @@ function PrototypeSyncPage() {
     try {
       setActionError(null)
       const insertableRow = await workspace.base.database.createInsertableRow('objects')
-      const rowRecord = insertableRow as Record<string, unknown>
+      const row = {
+        ...(insertableRow as unknown as ObjectRow),
+        _actor: selectedActorId,
+        type_id: newObjectTypeId,
+      } satisfies ObjectRow
 
-      await workspace.syncClient.executeMutation(createObjectMutation, {
-        actorId: selectedActorId,
-        objectId: rowRecord._id as Id<'objects'>,
-        createdAt: rowRecord._createdAt as bigint,
-        typeId: newObjectTypeId,
+      await workspace.syncClient.executeMutation(objectsInsertMutation, {
+        row,
       })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
@@ -234,10 +222,14 @@ function PrototypeSyncPage() {
 
     try {
       setActionError(null)
-      await workspace.syncClient.executeMutation(changeObjectTypeMutation, {
-        actorId: selectedActorId,
-        objectId,
-        nextTypeId,
+      await workspace.syncClient.executeMutation(objectsUpdateMutation, {
+        key: {
+          _actor: selectedActorId,
+          _id: objectId,
+        },
+        changes: {
+          type_id: nextTypeId,
+        },
       })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
@@ -285,25 +277,32 @@ function PrototypeSyncPage() {
       )
       const insertableRow = existingField
         ? null
-        : (await workspace.base.database.createInsertableRow('fields')) as Record<
-            string,
-            unknown
-          >
+        : ((await workspace.base.database.createInsertableRow('fields')) as unknown as FieldRow)
+      const createRow =
+        existingField ??
+        ({
+          ...(insertableRow as FieldRow),
+          _actor: objectRow._actor,
+          object_id: objectRow._id,
+          field_type_id: draft.fieldTypeId,
+          name: draft.name,
+          body: draft.body,
+        } satisfies FieldRow)
 
-      await workspace.syncClient.executeMutation(
-        upsertFieldByObjectTypeMutation,
-        {
-          actorId: objectRow._actor,
-          objectId: objectRow._id,
-          fieldTypeId: draft.fieldTypeId,
-          fieldId: existingField?._id ?? (insertableRow?._id as Id<'fields'>),
-          createdAt:
-            existingField?._createdAt ??
-            (insertableRow?._createdAt as bigint),
+      await workspace.syncClient.executeMutation(fieldsUpsertByByObjectIdFieldTypeMutation, {
+        values: {
+          _actor: objectRow._actor,
+          object_id: objectRow._id,
+          field_type_id: draft.fieldTypeId,
+        },
+        create: createRow,
+        update: {
+          object_id: objectRow._id,
+          field_type_id: draft.fieldTypeId,
           name: draft.name,
           body: draft.body,
         },
-      )
+      })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
     }
@@ -638,10 +637,10 @@ function PrototypeSyncPage() {
                     </div>
                     <div className="grid gap-3 lg:grid-cols-2">
                       <pre className="overflow-auto rounded-md bg-muted p-3 text-xs">
-                        {serializePrototypeJson(conflict.localResult)}
+                        {serializeSyncPayload(conflict.localResult)}
                       </pre>
                       <pre className="overflow-auto rounded-md bg-muted p-3 text-xs">
-                        {serializePrototypeJson(conflict.conflict?.serverResult ?? null)}
+                        {serializeSyncPayload(conflict.conflict?.serverResult ?? null)}
                       </pre>
                     </div>
                   </div>
