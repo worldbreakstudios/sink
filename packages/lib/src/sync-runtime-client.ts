@@ -73,6 +73,15 @@ export interface SyncClient<
 > {
   start(): void
   stop(): void
+  beginMutationTransaction<TArgs, TLocalResult, TServerResult>(
+    definition: SyncMutationDefinition<
+      TArgs,
+      TLocalResult,
+      TServerResult,
+      TCollections
+    >,
+    args: TArgs,
+  ): Promise<OpenSyncMutationTransaction<TArgs, TLocalResult, TServerResult>>
   watchQuery<TArgs, TResult>(
     definition: SyncQueryDefinition<TArgs, TResult, TCollections>,
     args: TArgs,
@@ -96,6 +105,26 @@ export interface SyncClient<
   getSnapshot(): SyncClientSnapshot
 }
 
+export interface OpenSyncMutationTransaction<
+  TArgs = unknown,
+  TLocalResult = unknown,
+  TServerResult = unknown,
+> {
+  readonly transactionId: string
+  readonly mutationName: string
+  commit(args: TArgs): Promise<TLocalResult | TServerResult>
+  abort(): Promise<void>
+}
+
+interface HeldMutationTransactionContext {
+  definition: SyncMutationDefinition<any, any, any, any>
+  args: unknown
+  lockTargets: ReturnType<SyncMutationDefinition['lockTargets']>
+  keepAliveTimer: ReturnType<typeof setTimeout> | null
+  keepAliveInFlight: boolean
+  closed: boolean
+}
+
 export function createSyncClient<TCollections extends object>(
   options: CreateSyncClientOptions<TCollections>,
 ): SyncClient<TCollections> {
@@ -103,6 +132,7 @@ export function createSyncClient<TCollections extends object>(
   const createSocket = options.webSocketFactory ?? defaultWebSocketFactory
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000
   const transactionOpenTimeoutMs = Math.max(reconnectDelayMs * 2, 3000)
+  const heldTransactionKeepAliveMs = Math.max(reconnectDelayMs * 4, 5000)
   const queryPath = options.queryPath ?? '/api/query'
   const listeners = new Set<() => void>()
   const querySubscriptions = new Map<
@@ -113,6 +143,7 @@ export function createSyncClient<TCollections extends object>(
   const pendingStatusRequests = new Map<string, Deferred<SyncServerMessage>>()
   const pendingFinalizations = new Map<string, Deferred<SyncServerMessage>>()
   const pendingTransactions = new Map<string, PendingTransactionContext>()
+  const heldTransactions = new Map<string, HeldMutationTransactionContext>()
 
   const clientId = crypto.randomUUID()
   let started = false
@@ -675,6 +706,238 @@ export function createSyncClient<TCollections extends object>(
     return deferred.promise
   }
 
+  function clearHeldTransactionKeepAlive(transactionId: string): void {
+    const context = heldTransactions.get(transactionId)
+
+    if (!context?.keepAliveTimer) {
+      return
+    }
+
+    clearTimeout(context.keepAliveTimer)
+    context.keepAliveTimer = null
+  }
+
+  function scheduleHeldTransactionKeepAlive(transactionId: string): void {
+    const context = heldTransactions.get(transactionId)
+
+    if (!context || context.closed) {
+      return
+    }
+
+    clearHeldTransactionKeepAlive(transactionId)
+    context.keepAliveTimer = setTimeout(() => {
+      void refreshHeldTransactionLease(transactionId)
+    }, heldTransactionKeepAliveMs)
+  }
+
+  async function refreshHeldTransactionLease(transactionId: string): Promise<void> {
+    const context = heldTransactions.get(transactionId)
+
+    if (!context || context.closed) {
+      return
+    }
+
+    if (context.keepAliveInFlight) {
+      scheduleHeldTransactionKeepAlive(transactionId)
+      return
+    }
+
+    context.keepAliveInFlight = true
+
+    try {
+      if (isSocketConnected()) {
+        const refreshed = await requestTransactionOpen(
+          transactionId,
+          context.definition.name,
+          context.args,
+          context.lockTargets,
+        )
+
+        if (refreshed.type === 'txn_open_denied') {
+          throw new Error(
+            'This edit transaction lost its lock because another client acquired it.',
+          )
+        }
+      }
+    } catch (error) {
+      snapshot = {
+        ...snapshot,
+        lastError:
+          error instanceof Error
+            ? error.message
+            : 'Failed to keep an edit transaction alive.',
+      }
+      notify()
+    } finally {
+      const nextContext = heldTransactions.get(transactionId)
+
+      if (nextContext) {
+        nextContext.keepAliveInFlight = false
+        scheduleHeldTransactionKeepAlive(transactionId)
+      }
+    }
+  }
+
+  async function commitOpenedMutationTransaction<TArgs, TLocalResult, TServerResult>(
+    transactionId: string,
+    definition: SyncMutationDefinition<
+      TArgs,
+      TLocalResult,
+      TServerResult,
+      TCollections
+    >,
+    args: TArgs,
+  ): Promise<TLocalResult | TServerResult> {
+    const heldContext = heldTransactions.get(transactionId)
+
+    if (!heldContext || heldContext.closed) {
+      throw new Error('This edit transaction is no longer open.')
+    }
+
+    const nextLockTargets = definition.lockTargets(args)
+
+    if (serializeSyncPayload(nextLockTargets) !== serializeSyncPayload(heldContext.lockTargets)) {
+      throw new Error(
+        'The mutation changed which rows it locks. Start a new transaction for this edit.',
+      )
+    }
+
+    heldContext.closed = true
+    clearHeldTransactionKeepAlive(transactionId)
+    heldTransactions.delete(transactionId)
+
+    const transaction = options.createBatchTransaction(options.collections, {
+      autoCommit: false,
+    })
+    const localContext: SyncMutationLocalContext<TCollections> = {
+      database: options.database,
+      collections: options.collections,
+      createBatchTransaction: options.createBatchTransaction,
+      getProtectedRowKeys: (tableName: string) =>
+        getProtectedRowKeySet(
+          options.database,
+          tableName,
+          options.metadata.tables[tableName]?.keyColumns ?? ['_id'],
+          clientId,
+        ),
+      transaction,
+    }
+    const localResult = await definition.applyLocal(localContext, args)
+    const invalidations = definition.invalidate(args, localResult)
+
+    await upsertActiveTransaction(options.database, {
+      clientId,
+      transactionId,
+      mutationName: definition.name,
+      args,
+      localResult,
+      lockTargets: nextLockTargets,
+      invalidations,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    pendingTransactions.set(transactionId, {
+      definition,
+      args,
+      localResult,
+      invalidations,
+      transaction,
+      queueId: null,
+    })
+
+    const waiter = getFinalizationWaiter(transactionId)
+    sendMessage({
+      type: 'txn_commit',
+      clientId,
+      transactionId,
+      mutationName: definition.name,
+      args,
+      localResult,
+      force: false,
+    })
+
+    await refreshSnapshot()
+    const finalMessage = await waiter.promise
+
+    if (finalMessage.type === 'txn_committed') {
+      return localResult
+    }
+
+    throw new Error('Unexpected transaction finalization payload.')
+  }
+
+  async function abortOpenedMutationTransaction(transactionId: string): Promise<void> {
+    const heldContext = heldTransactions.get(transactionId)
+
+    if (!heldContext) {
+      return
+    }
+
+    heldContext.closed = true
+    clearHeldTransactionKeepAlive(transactionId)
+    heldTransactions.delete(transactionId)
+
+    if (!isSocketConnected()) {
+      return
+    }
+
+    sendMessage({
+      type: 'txn_abort',
+      clientId,
+      transactionId,
+    })
+  }
+
+  async function beginMutationTransaction<TArgs, TLocalResult, TServerResult>(
+    definition: SyncMutationDefinition<
+      TArgs,
+      TLocalResult,
+      TServerResult,
+      TCollections
+    >,
+    args: TArgs,
+  ): Promise<OpenSyncMutationTransaction<TArgs, TLocalResult, TServerResult>> {
+    await ensureSyncLocalStateTables(options.database)
+
+    if (!isSocketConnected()) {
+      throw new Error('A live sync connection is required to open an edit transaction.')
+    }
+
+    const transactionId = crypto.randomUUID()
+    const lockTargets = definition.lockTargets(args)
+    const opened = await requestTransactionOpen(
+      transactionId,
+      definition.name,
+      args,
+      lockTargets,
+    )
+
+    if (opened.type === 'txn_open_denied') {
+      throw new Error(
+        'The requested rows are locked by another client. Try again shortly.',
+      )
+    }
+
+    heldTransactions.set(transactionId, {
+      definition,
+      args,
+      lockTargets,
+      keepAliveTimer: null,
+      keepAliveInFlight: false,
+      closed: false,
+    })
+    scheduleHeldTransactionKeepAlive(transactionId)
+
+    return {
+      transactionId,
+      mutationName: definition.name,
+      commit: (nextArgs) =>
+        commitOpenedMutationTransaction(transactionId, definition, nextArgs),
+      abort: () => abortOpenedMutationTransaction(transactionId),
+    }
+  }
+
   function getFinalizationWaiter(transactionId: string): Deferred<SyncServerMessage> {
     const existing = pendingFinalizations.get(transactionId)
 
@@ -745,17 +1008,9 @@ export function createSyncClient<TCollections extends object>(
       return executeOfflineMutation(definition, args)
     }
 
-    const transactionId = crypto.randomUUID()
-    const lockTargets = definition.lockTargets(args)
-    let opened: SyncServerMessage
-
     try {
-      opened = await requestTransactionOpen(
-        transactionId,
-        definition.name,
-        args,
-        lockTargets,
-      )
+      const openedTransaction = await beginMutationTransaction(definition, args)
+      return openedTransaction.commit(args)
     } catch (error) {
       if (!isSocketConnected()) {
         return executeOfflineMutation(definition, args)
@@ -763,72 +1018,6 @@ export function createSyncClient<TCollections extends object>(
 
       throw error
     }
-
-    if (opened.type === 'txn_open_denied') {
-      throw new Error(
-        'The requested rows are locked by another client. Try again shortly.',
-      )
-    }
-
-    const transaction = options.createBatchTransaction(options.collections, {
-      autoCommit: false,
-    })
-    const localContext: SyncMutationLocalContext<TCollections> = {
-      database: options.database,
-      collections: options.collections,
-      createBatchTransaction: options.createBatchTransaction,
-      getProtectedRowKeys: (tableName: string) =>
-        getProtectedRowKeySet(
-          options.database,
-          tableName,
-          options.metadata.tables[tableName]?.keyColumns ?? ['_id'],
-          clientId,
-        ),
-      transaction,
-    }
-    const localResult = await definition.applyLocal(localContext, args)
-    const invalidations = definition.invalidate(args, localResult)
-
-    await upsertActiveTransaction(options.database, {
-      clientId,
-      transactionId,
-      mutationName: definition.name,
-      args,
-      localResult,
-      lockTargets,
-      invalidations,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-
-    pendingTransactions.set(transactionId, {
-      definition,
-      args,
-      localResult,
-      invalidations,
-      transaction,
-      queueId: null,
-    })
-
-    const waiter = getFinalizationWaiter(transactionId)
-    sendMessage({
-      type: 'txn_commit',
-      clientId,
-      transactionId,
-      mutationName: definition.name,
-      args,
-      localResult,
-      force: false,
-    })
-
-    await refreshSnapshot()
-    const finalMessage = await waiter.promise
-
-    if (finalMessage.type === 'txn_committed') {
-      return localResult
-    }
-
-    throw new Error('Unexpected transaction finalization payload.')
   }
 
   async function executeOfflineMutation<TArgs, TLocalResult, TServerResult>(
@@ -995,6 +1184,23 @@ export function createSyncClient<TCollections extends object>(
       reconnectTimer = null
     }
 
+    for (const transactionId of heldTransactions.keys()) {
+      clearHeldTransactionKeepAlive(transactionId)
+
+      if (isSocketConnected()) {
+        try {
+          sendMessage({
+            type: 'txn_abort',
+            clientId,
+            transactionId,
+          })
+        } catch {
+          // Ignore shutdown-time abort failures.
+        }
+      }
+    }
+    heldTransactions.clear()
+
     detachBrowserNetworkListeners()
     closeSocket()
     rejectDeferredMap(pendingOpenRequests, 'Sync client stopped.')
@@ -1024,6 +1230,7 @@ export function createSyncClient<TCollections extends object>(
   return {
     start,
     stop,
+    beginMutationTransaction,
     watchQuery,
     refreshQuery,
     executeMutation,

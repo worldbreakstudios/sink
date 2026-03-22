@@ -377,6 +377,48 @@ function App() {
     [refreshSnapshot, selectedTable, workspace],
   )
 
+  const handleCellEditStart = useCallback(
+    async (rowId: SqliteDemoId, columnName: string) => {
+      if (workspace === null || selectedTable === undefined) {
+        return false
+      }
+
+      try {
+        await workspace.beginCellEditTransaction(
+          selectedTable.name as SqliteDemoTableName,
+          rowId,
+          columnName,
+        )
+        setActionError(null)
+        return true
+      } catch (error) {
+        setActionError(formatUnknownError(error))
+        return false
+      }
+    },
+    [selectedTable, workspace],
+  )
+
+  const handleCellEditCancel = useCallback(
+    async (rowId: SqliteDemoId, columnName: string) => {
+      if (workspace === null || selectedTable === undefined) {
+        return
+      }
+
+      try {
+        await workspace.cancelCellEditTransaction(
+          selectedTable.name as SqliteDemoTableName,
+          rowId,
+          columnName,
+        )
+        setActionError(null)
+      } catch (error) {
+        setActionError(formatUnknownError(error))
+      }
+    },
+    [selectedTable, workspace],
+  )
+
   const handleAddRow = useCallback(async () => {
     if (workspace === null || selectedTable === undefined) return
 
@@ -694,7 +736,9 @@ function App() {
               rows={tableRows}
               collections={workspace?.collections ?? null}
               queryResult={queryResult}
+              onCellEditStart={handleCellEditStart}
               onCellEdit={handleCellEdit}
+              onCellEditCancel={handleCellEditCancel}
               onAddRow={handleAddRow}
               onDeleteSelected={handleDeleteSelected}
               onClearQuery={handleClearQuery}

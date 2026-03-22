@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -397,7 +397,9 @@ export function DataTable({
   rows,
   collections,
   queryResult,
+  onCellEditStart,
   onCellEdit,
+  onCellEditCancel,
   onAddRow,
   onDeleteSelected,
   onClearQuery,
@@ -410,7 +412,9 @@ export function DataTable({
   rows: SqliteDemoRow[]
   collections: SchemaCollections | null
   queryResult: QueryResult | null
+  onCellEditStart: (rowId: SqliteDemoId, columnName: string) => Promise<boolean>
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
+  onCellEditCancel: (rowId: SqliteDemoId, columnName: string) => Promise<void>
   onAddRow: () => void
   onDeleteSelected?: (rowKeys: string[]) => Promise<void>
   onClearQuery?: () => void
@@ -453,6 +457,8 @@ export function DataTable({
     columnName: string
     value: string
   } | null>(null)
+  const [openingCellKey, setOpeningCellKey] = useState<string | null>(null)
+  const skipBlurCommitRef = useRef<string | null>(null)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [resizing, setResizing] = useState<{ columnName: string; startX: number; startWidth: number } | null>(null)
   const [columnOrder, setColumnOrder] = useState<string[]>([])
@@ -771,6 +777,57 @@ export function DataTable({
       setEditingCell(null)
     },
     [onCellEdit],
+  )
+
+  const cancelCellEdit = useCallback(
+    async (rowId: SqliteDemoId, rowKey: string, columnName: string) => {
+      skipBlurCommitRef.current = `${rowKey}:${columnName}`
+      await onCellEditCancel(rowId, columnName)
+
+      setEditingCell((currentCell) => {
+        if (
+          currentCell?.rowKey === rowKey &&
+          currentCell.columnName === columnName
+        ) {
+          return null
+        }
+
+        return currentCell
+      })
+    },
+    [onCellEditCancel],
+  )
+
+  const startCellEdit = useCallback(
+    async (
+      rowId: SqliteDemoId,
+      rowKey: string,
+      columnName: string,
+      value: string,
+    ) => {
+      const nextCellKey = `${rowKey}:${columnName}`
+      setOpeningCellKey(nextCellKey)
+
+      try {
+        const opened = await onCellEditStart(rowId, columnName)
+
+        if (!opened) {
+          return
+        }
+
+        setEditingCell({
+          rowId,
+          rowKey,
+          columnName,
+          value,
+        })
+      } finally {
+        setOpeningCellKey((currentKey) =>
+          currentKey === nextCellKey ? null : currentKey,
+        )
+      }
+    },
+    [onCellEditStart],
   )
 
   const handleRun = useCallback(async () => {
@@ -1380,7 +1437,11 @@ export function DataTable({
                         aria-label={`Select row ${rowKey}`}
                       />
                     </TableCell>
-                    {columnNames.map((columnName) => (
+                    {columnNames.map((columnName) => {
+                      const cellKey = `${rowKey}:${columnName}`
+                      const isOpeningCell = openingCellKey === cellKey
+
+                      return (
                       <TableCell
                         key={`${tableName}-${rowKey}-${columnName}`}
                         className="font-mono text-xs"
@@ -1406,8 +1467,16 @@ export function DataTable({
                                 })
                               }
                               onBlur={() =>
-                                commitCellEdit(rowId, columnName, editingCell.value)
+                                skipBlurCommitRef.current === cellKey
+                                  ? (skipBlurCommitRef.current = null)
+                                  : commitCellEdit(rowId, columnName, editingCell.value)
                               }
+                              onKeyDown={(event) => {
+                                if (event.key === 'Escape') {
+                                  event.preventDefault()
+                                  void cancelCellEdit(rowId, rowKey, columnName)
+                                }
+                              }}
                               className="min-h-24"
                             />
                           ) : (
@@ -1423,7 +1492,9 @@ export function DataTable({
                                 })
                               }
                               onBlur={() =>
-                                commitCellEdit(rowId, columnName, editingCell.value)
+                                skipBlurCommitRef.current === cellKey
+                                  ? (skipBlurCommitRef.current = null)
+                                  : commitCellEdit(rowId, columnName, editingCell.value)
                               }
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter') {
@@ -1431,7 +1502,8 @@ export function DataTable({
                                 }
 
                                 if (event.key === 'Escape') {
-                                  setEditingCell(null)
+                                  event.preventDefault()
+                                  void cancelCellEdit(rowId, rowKey, columnName)
                                 }
                               }}
                               className="h-7 text-xs"
@@ -1441,9 +1513,12 @@ export function DataTable({
                           <div className="group/cell flex items-center justify-between gap-1">
                             <span className={cn(
                               'truncate',
+                              isOpeningCell && 'text-primary',
                               readOnlyColumns.has(columnName) && 'text-muted-foreground',
                             )}>
-                              {formatCellValue(getRowValue(row, columnName))}
+                              {isOpeningCell
+                                ? 'locking...'
+                                : formatCellValue(getRowValue(row, columnName))}
                             </span>
                             <CellActionMenu
                               value={formatCellValue(getRowValue(row, columnName))}
@@ -1451,12 +1526,12 @@ export function DataTable({
                               isReadOnly={readOnlyColumns.has(columnName)}
                               canFilter={allIndexFields.has(columnName)}
                               onEdit={() =>
-                                setEditingCell({
+                                void startCellEdit(
                                   rowId,
                                   rowKey,
                                   columnName,
-                                  value: formatCellValue(getRowValue(row, columnName)),
-                                })
+                                  formatCellValue(getRowValue(row, columnName)),
+                                )
                               }
                               onView={() =>
                                 setViewerModal({
@@ -1471,7 +1546,7 @@ export function DataTable({
                           </div>
                         )}
                       </TableCell>
-                    ))}
+                    )})}
                   </TableRow>
                 )
               })}
