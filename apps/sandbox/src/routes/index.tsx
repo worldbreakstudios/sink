@@ -23,7 +23,12 @@ import {
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
 import type { SqliteReferenceColumn } from '@sink/lib'
-import { INDEXES, REFERENCE_COLUMNS, type TableName } from '@/data/generated/schema.gen'
+import {
+  INDEXES,
+  KEY_COLUMNS,
+  REFERENCE_COLUMNS,
+  type TableName,
+} from '@/data/generated/schema.gen'
 import {
   buildOffsetCursorInput,
   DataTable,
@@ -51,6 +56,42 @@ const emptySyncSnapshot: SyncClientSnapshot = {
   lastError: null,
   lastInvalidationAt: null,
 } as const
+
+interface DemoServerLock {
+  transactionId: string
+  clientId: string
+  mutationName: string
+  expiresAt: number
+  updatedAt: number
+  lockTargets: Array<{
+    tableName: string
+    kind: 'primary' | 'unique'
+    keyName: string
+    values: Record<string, string>
+  }>
+}
+
+interface DemoLockedRowInfo {
+  count: number
+  title: string
+}
+
+const demoLocksEndpoint = new URL('/api/locks-demo', resolveSqliteDemoServerUrl()).toString()
+
+function serializeDemoLockedRowKey(
+  tableName: SqliteDemoTableName,
+  values: Record<string, string>,
+): string {
+  const keyColumns = KEY_COLUMNS[tableName]
+
+  if (keyColumns.length === 1) {
+    return values[keyColumns[0] ?? '_id'] ?? ''
+  }
+
+  return JSON.stringify(
+    keyColumns.map((columnName) => [columnName, values[columnName] ?? null]),
+  )
+}
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -103,6 +144,7 @@ function App() {
   const [isDeletingRows, setIsDeletingRows] = useState(false)
   const [isClearingLocal, setIsClearingLocal] = useState(false)
   const [isResettingServer, setIsResettingServer] = useState(false)
+  const [serverLocks, setServerLocks] = useState<DemoServerLock[]>([])
 
   const refreshSnapshot = useCallback(
     async (activeWorkspace: SqliteDemoCollectionsWorkspace) => {
@@ -164,6 +206,45 @@ function App() {
     }
   }, [loadDemo])
 
+  useEffect(() => {
+    if (!workspace) {
+      setServerLocks([])
+      return
+    }
+
+    let cancelled = false
+
+    const loadLocks = async () => {
+      try {
+        const response = await fetch(demoLocksEndpoint)
+
+        if (!response.ok) {
+          throw new Error(`Failed to load locks (${response.status}).`)
+        }
+
+        const payload = (await response.json()) as { locks?: DemoServerLock[] }
+
+        if (!cancelled) {
+          setServerLocks(payload.locks ?? [])
+        }
+      } catch {
+        if (!cancelled) {
+          setServerLocks([])
+        }
+      }
+    }
+
+    void loadLocks()
+    const intervalId = window.setInterval(() => {
+      void loadLocks()
+    }, 1000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [workspace])
+
   const syncSnapshot = useSyncExternalStore(
     workspace?.syncClient.subscribe ?? (() => () => {}),
     workspace?.syncClient.getSnapshot ?? (() => emptySyncSnapshot),
@@ -184,6 +265,38 @@ function App() {
         : undefined,
     [selectedTable?.name, workspace],
   )
+
+  const lockedRowsByKey = useMemo<Record<string, DemoLockedRowInfo>>(() => {
+    if (!selectedTable) {
+      return {}
+    }
+
+    const tableName = selectedTable.name as SqliteDemoTableName
+    const entries = new Map<string, DemoLockedRowInfo>()
+
+    for (const lock of serverLocks) {
+      const primaryTargets = lock.lockTargets.filter(
+        (target) => target.tableName === tableName && target.kind === 'primary',
+      )
+
+      for (const target of primaryTargets) {
+        const rowKey = serializeDemoLockedRowKey(tableName, target.values)
+        const existing = entries.get(rowKey)
+        const expiresInSeconds = Math.max(
+          0,
+          Math.ceil((lock.expiresAt - Date.now()) / 1000),
+        )
+        const detail = `${lock.mutationName} • ${lock.clientId.slice(0, 8)} • ${expiresInSeconds}s`
+
+        entries.set(rowKey, {
+          count: (existing?.count ?? 0) + 1,
+          title: existing ? `${existing.title}\n${detail}` : detail,
+        })
+      }
+    }
+
+    return Object.fromEntries(entries)
+  }, [selectedTable, serverLocks])
 
   const selectedRowsQuery = useLiveQuery(
     () => selectedCollection as never,
@@ -642,6 +755,9 @@ function App() {
             <Badge variant="outline" className="text-xs">
               queue {syncSnapshot.offlineQueue}
             </Badge>
+            <Badge variant="outline" className="text-xs">
+              locks {Object.keys(lockedRowsByKey).length}
+            </Badge>
             {syncSnapshot.conflicts.length > 0 && (
               <Badge variant="destructive" className="text-xs">
                 conflicts {syncSnapshot.conflicts.length}
@@ -736,6 +852,7 @@ function App() {
               rows={tableRows}
               collections={workspace?.collections ?? null}
               queryResult={queryResult}
+              lockedRowsByKey={lockedRowsByKey}
               onCellEditStart={handleCellEditStart}
               onCellEdit={handleCellEdit}
               onCellEditCancel={handleCellEditCancel}

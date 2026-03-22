@@ -18,6 +18,8 @@ interface CellActionMenuProps {
   value: string
   columnName: string
   isReadOnly: boolean
+  isEditLocked?: boolean
+  editLockedReason?: string
   canFilter: boolean
   onEdit: () => void
   onView: () => void
@@ -33,6 +35,8 @@ export function CellActionMenu({
   value,
   columnName,
   isReadOnly,
+  isEditLocked = false,
+  editLockedReason,
   canFilter,
   onEdit,
   onView,
@@ -135,7 +139,11 @@ export function CellActionMenu({
           <DropdownMenuShortcut>Cmd+C</DropdownMenuShortcut>
         </DropdownMenuItem>
         {!isReadOnly && (
-          <DropdownMenuItem onClick={onEdit}>
+          <DropdownMenuItem
+            disabled={isEditLocked}
+            onClick={isEditLocked ? undefined : onEdit}
+            title={isEditLocked ? editLockedReason : undefined}
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="14"
@@ -151,8 +159,10 @@ export function CellActionMenu({
               <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
               <path d="m15 5 4 4" />
             </svg>
-            Edit
-            <DropdownMenuShortcut>Enter</DropdownMenuShortcut>
+            {isEditLocked ? 'Edit locked' : 'Edit'}
+            <DropdownMenuShortcut>
+              {isEditLocked ? '🔒' : 'Enter'}
+            </DropdownMenuShortcut>
           </DropdownMenuItem>
         )}
         {canFilter && (

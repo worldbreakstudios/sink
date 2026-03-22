@@ -1,6 +1,9 @@
 import {
   ServerSqliteDatabase,
+  SYNC_SERVER_TRANSACTIONS_TABLE,
   type SyncInvalidationTarget,
+  parseSyncPayload,
+  type SyncLockTarget,
 } from '@sink/lib/server'
 import { createAllTables } from './src/data/generated/schema.gen.ts'
 import { createGeneratedSyncServerRuntime } from './src/data/generated/operations.gen.ts'
@@ -10,6 +13,7 @@ const port = Number.parseInt(process.env.PORT ?? '3001', 10)
 const hostname = process.env.HOST ?? '127.0.0.1'
 const websocketPath = process.env.SINK_TX_PATH ?? '/ws/transactions'
 const resetPath = process.env.SINK_RESET_PATH ?? '/api/reset-demo'
+const locksPath = process.env.SINK_LOCKS_PATH ?? '/api/locks-demo'
 const databasePath =
   process.env.SINK_SERVER_DB_PATH ??
   new URL('./sandbox-sync.db', import.meta.url).pathname
@@ -24,6 +28,39 @@ const server = await createGeneratedSyncServerRuntime({
   hostname,
   websocketPath,
   async handleHttpRequest(request, response) {
+    if (request.method === 'GET' && request.url === locksPath) {
+      const rows = await database.query<{
+        transactionId: string
+        clientId: string
+        mutationName: string
+        lockTargetsJson: string
+        expiresAt: number
+        updatedAt: number
+      }>(
+        `SELECT "transactionId", "clientId", "mutationName", "lockTargetsJson", "expiresAt", "updatedAt"
+         FROM "${SYNC_SERVER_TRANSACTIONS_TABLE}"
+         WHERE "status" = 'opened' AND "expiresAt" > ?
+         ORDER BY "updatedAt" DESC;`,
+        [Date.now()],
+      )
+
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'application/json')
+      response.end(
+        JSON.stringify({
+          locks: rows.map((row) => ({
+            transactionId: row.transactionId,
+            clientId: row.clientId,
+            mutationName: row.mutationName,
+            expiresAt: row.expiresAt,
+            updatedAt: row.updatedAt,
+            lockTargets: parseSyncPayload<SyncLockTarget[]>(row.lockTargetsJson),
+          })),
+        }),
+      )
+      return true
+    }
+
     if (request.method !== 'POST' || request.url !== resetPath) {
       return false
     }

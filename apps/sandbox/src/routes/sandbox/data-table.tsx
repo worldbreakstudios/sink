@@ -395,6 +395,7 @@ export function DataTable({
   rows,
   collections,
   queryResult,
+  lockedRowsByKey,
   onCellEditStart,
   onCellEdit,
   onCellEditCancel,
@@ -410,6 +411,7 @@ export function DataTable({
   rows: SqliteDemoRow[]
   collections: SchemaCollections | null
   queryResult: QueryResult | null
+  lockedRowsByKey: Record<string, { count: number; title: string }>
   onCellEditStart: (rowId: SqliteDemoId, columnName: string) => Promise<boolean>
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
   onCellEditCancel: (rowId: SqliteDemoId, columnName: string) => Promise<void>
@@ -797,7 +799,12 @@ export function DataTable({
       rowKey: string,
       columnName: string,
       value: string,
+      isLocked: boolean,
     ) => {
+      if (isLocked) {
+        return
+      }
+
       const nextCellKey = `${rowKey}:${columnName}`
       setOpeningCellKey(nextCellKey)
 
@@ -1414,6 +1421,7 @@ export function DataTable({
                 const rowId = getRowId(row)
                 const rowKey = getSerializedRowId(row)
                 const isRowSelected = selectedRowKeys.has(rowKey)
+                const rowLockInfo = lockedRowsByKey[rowKey]
 
                 return (
                   <TableRow
@@ -1424,13 +1432,26 @@ export function DataTable({
                     )}
                   >
                     {/* Checkbox cell */}
-                    <TableCell className="w-10 px-3">
-                      <Checkbox
-                        checked={isRowSelected}
-                        onCheckedChange={() => toggleRowSelection(rowKey)}
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={`Select row ${rowKey}`}
-                      />
+                    <TableCell className="w-14 px-3">
+                      <div className="flex items-center gap-2">
+                        {rowLockInfo ? (
+                          <span
+                            className="text-amber-600"
+                            title={`Locked\n${rowLockInfo.title}`}
+                            aria-label={`Locked row ${rowKey}`}
+                          >
+                            🔒
+                          </span>
+                        ) : (
+                          <span className="inline-block w-4" aria-hidden="true" />
+                        )}
+                        <Checkbox
+                          checked={isRowSelected}
+                          onCheckedChange={() => toggleRowSelection(rowKey)}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={`Select row ${rowKey}`}
+                        />
+                      </div>
                     </TableCell>
                     {columnNames.map((columnName) => {
                       const cellKey = `${rowKey}:${columnName}`
@@ -1460,6 +1481,8 @@ export function DataTable({
                             value={formatCellValue(getRowValue(row, columnName))}
                             columnName={columnName}
                             isReadOnly={readOnlyColumns.has(columnName)}
+                            isEditLocked={Boolean(rowLockInfo)}
+                            editLockedReason={rowLockInfo?.title}
                             canFilter={allIndexFields.has(columnName)}
                             onEdit={() =>
                               void startCellEdit(
@@ -1467,6 +1490,7 @@ export function DataTable({
                                 rowKey,
                                 columnName,
                                 formatCellValue(getRowValue(row, columnName)),
+                                Boolean(rowLockInfo),
                               )
                             }
                             onView={() =>
