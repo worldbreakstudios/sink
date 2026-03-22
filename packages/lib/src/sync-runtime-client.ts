@@ -44,6 +44,14 @@ interface Deferred<TValue> {
   reject: (error: unknown) => void
 }
 
+interface BrowserNetworkRuntime {
+  navigator?: {
+    onLine?: boolean
+  }
+  addEventListener?: (type: 'online' | 'offline', listener: () => void) => void
+  removeEventListener?: (type: 'online' | 'offline', listener: () => void) => void
+}
+
 export interface CreateSyncClientOptions<
   TCollections extends object,
 > {
@@ -91,8 +99,10 @@ export interface SyncClient<
 export function createSyncClient<TCollections extends object>(
   options: CreateSyncClientOptions<TCollections>,
 ): SyncClient<TCollections> {
+  const browserRuntime = globalThis as typeof globalThis & BrowserNetworkRuntime
   const createSocket = options.webSocketFactory ?? defaultWebSocketFactory
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000
+  const transactionOpenTimeoutMs = Math.max(reconnectDelayMs * 2, 3000)
   const queryPath = options.queryPath ?? '/api/query'
   const listeners = new Set<() => void>()
   const querySubscriptions = new Map<
@@ -109,6 +119,8 @@ export function createSyncClient<TCollections extends object>(
   let stopped = false
   let socket: SyncSocketLike | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let browserOffline = browserRuntime.navigator?.onLine === false
+  let browserListenersAttached = false
   let replayInProgress = false
   let snapshot: SyncClientSnapshot = {
     connection: 'stopped',
@@ -120,7 +132,11 @@ export function createSyncClient<TCollections extends object>(
   }
 
   const handleOpen = () => {
-    void onSocketOpen()
+    void onSocketOpen().catch((error) => {
+      markTransportUnavailable(
+        error instanceof Error ? error.message : 'Failed to initialize sync connection.',
+      )
+    })
   }
 
   const handleClose = () => {
@@ -128,10 +144,14 @@ export function createSyncClient<TCollections extends object>(
     snapshot = {
       ...snapshot,
       connection: stopped ? 'stopped' : 'disconnected',
+      lastError:
+        browserOffline
+          ? 'Browser is offline.'
+          : snapshot.lastError,
     }
     notify()
 
-    if (!stopped) {
+    if (!stopped && !browserOffline) {
       scheduleReconnect()
     }
   }
@@ -152,10 +172,48 @@ export function createSyncClient<TCollections extends object>(
     void processMessage(event.data)
   }
 
+  const handleBrowserOnline = () => {
+    browserOffline = false
+    snapshot = {
+      ...snapshot,
+      lastError: snapshot.lastError === 'Browser is offline.' ? null : snapshot.lastError,
+    }
+    notify()
+
+    if (!stopped && socket === null) {
+      connect()
+    }
+  }
+
+  const handleBrowserOffline = () => {
+    browserOffline = true
+    markTransportUnavailable('Browser is offline.')
+  }
+
   function notify(): void {
     for (const listener of listeners) {
       listener()
     }
+  }
+
+  function attachBrowserNetworkListeners(): void {
+    if (browserListenersAttached || !browserRuntime.addEventListener) {
+      return
+    }
+
+    browserRuntime.addEventListener('online', handleBrowserOnline)
+    browserRuntime.addEventListener('offline', handleBrowserOffline)
+    browserListenersAttached = true
+  }
+
+  function detachBrowserNetworkListeners(): void {
+    if (!browserListenersAttached || !browserRuntime.removeEventListener) {
+      return
+    }
+
+    browserRuntime.removeEventListener('online', handleBrowserOnline)
+    browserRuntime.removeEventListener('offline', handleBrowserOffline)
+    browserListenersAttached = false
   }
 
   async function refreshSnapshot(): Promise<void> {
@@ -172,7 +230,7 @@ export function createSyncClient<TCollections extends object>(
   }
 
   function scheduleReconnect(): void {
-    if (reconnectTimer !== null || stopped) {
+    if (reconnectTimer !== null || stopped || browserOffline) {
       return
     }
 
@@ -184,6 +242,16 @@ export function createSyncClient<TCollections extends object>(
 
   function connect(): void {
     if (stopped || socket !== null) {
+      return
+    }
+
+    if (browserOffline) {
+      snapshot = {
+        ...snapshot,
+        connection: 'disconnected',
+        lastError: 'Browser is offline.',
+      }
+      notify()
       return
     }
 
@@ -222,6 +290,56 @@ export function createSyncClient<TCollections extends object>(
     await recoverActiveTransactions()
     await refreshAllQueries()
     await replayOfflineQueue()
+  }
+
+  function rejectDeferredMap(
+    deferredMap: Map<string, Deferred<SyncServerMessage>>,
+    message: string,
+  ): void {
+    for (const deferred of deferredMap.values()) {
+      void deferred.promise.catch(() => {})
+      deferred.reject(new Error(message))
+    }
+    deferredMap.clear()
+  }
+
+  function closeSocket(): void {
+    if (!socket) {
+      return
+    }
+
+    socket.removeEventListener('open', handleOpen)
+    socket.removeEventListener('close', handleClose)
+    socket.removeEventListener('error', handleError)
+    socket.removeEventListener('message', handleMessage)
+    socket.close()
+    socket = null
+  }
+
+  function markTransportUnavailable(message: string): void {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+
+    closeSocket()
+    rejectDeferredMap(pendingOpenRequests, message)
+    rejectDeferredMap(pendingStatusRequests, message)
+    rejectDeferredMap(
+      pendingFinalizations,
+      `${message} Pending transactions will recover when sync reconnects.`,
+    )
+
+    snapshot = {
+      ...snapshot,
+      connection: stopped ? 'stopped' : 'disconnected',
+      lastError: message,
+    }
+    notify()
+
+    if (!stopped && !browserOffline) {
+      scheduleReconnect()
+    }
   }
 
   async function processMessage(rawMessage: string): Promise<void> {
@@ -327,7 +445,11 @@ export function createSyncClient<TCollections extends object>(
         })
       }
 
-      await requestTransactionStatus(record.transactionId)
+      try {
+        await requestTransactionStatus(record.transactionId)
+      } catch {
+        break
+      }
     }
 
     await refreshSnapshot()
@@ -510,15 +632,33 @@ export function createSyncClient<TCollections extends object>(
     assertConnected()
     const deferred = createDeferred<SyncServerMessage>()
     pendingOpenRequests.set(transactionId, deferred)
-    sendMessage({
-      type: 'txn_open',
-      clientId,
-      transactionId,
-      mutationName,
-      args,
-      lockTargets,
-    })
-    return deferred.promise
+    try {
+      sendMessage({
+        type: 'txn_open',
+        clientId,
+        transactionId,
+        mutationName,
+        args,
+        lockTargets,
+      })
+    } catch (error) {
+      pendingOpenRequests.delete(transactionId)
+      deferred.reject(error)
+      throw error
+    }
+
+    return withTimeout(
+      deferred.promise,
+      transactionOpenTimeoutMs,
+      () => {
+        if (pendingOpenRequests.get(transactionId) === deferred) {
+          pendingOpenRequests.delete(transactionId)
+        }
+
+        markTransportUnavailable('Timed out waiting for the sync server to open a transaction.')
+      },
+      'Timed out waiting for the sync server to open a transaction.',
+    )
   }
 
   async function requestTransactionStatus(
@@ -607,12 +747,22 @@ export function createSyncClient<TCollections extends object>(
 
     const transactionId = crypto.randomUUID()
     const lockTargets = definition.lockTargets(args)
-    const opened = await requestTransactionOpen(
-      transactionId,
-      definition.name,
-      args,
-      lockTargets,
-    )
+    let opened: SyncServerMessage
+
+    try {
+      opened = await requestTransactionOpen(
+        transactionId,
+        definition.name,
+        args,
+        lockTargets,
+      )
+    } catch (error) {
+      if (!isSocketConnected()) {
+        return executeOfflineMutation(definition, args)
+      }
+
+      throw error
+    }
 
     if (opened.type === 'txn_open_denied') {
       throw new Error(
@@ -800,7 +950,7 @@ export function createSyncClient<TCollections extends object>(
   }
 
   function isSocketConnected(): boolean {
-    return socket !== null && socket.readyState === 1
+    return !browserOffline && socket !== null && socket.readyState === 1
   }
 
   function watchQuery<TArgs, TResult>(
@@ -845,33 +995,11 @@ export function createSyncClient<TCollections extends object>(
       reconnectTimer = null
     }
 
-    if (socket) {
-      socket.removeEventListener('open', handleOpen)
-      socket.removeEventListener('close', handleClose)
-      socket.removeEventListener('error', handleError)
-      socket.removeEventListener('message', handleMessage)
-      socket.close()
-      socket = null
-    }
-
-    for (const deferred of pendingOpenRequests.values()) {
-      void deferred.promise.catch(() => {})
-      deferred.reject(new Error('Sync client stopped.'))
-    }
-
-    for (const deferred of pendingStatusRequests.values()) {
-      void deferred.promise.catch(() => {})
-      deferred.reject(new Error('Sync client stopped.'))
-    }
-
-    for (const deferred of pendingFinalizations.values()) {
-      void deferred.promise.catch(() => {})
-      deferred.reject(new Error('Sync client stopped.'))
-    }
-
-    pendingOpenRequests.clear()
-    pendingStatusRequests.clear()
-    pendingFinalizations.clear()
+    detachBrowserNetworkListeners()
+    closeSocket()
+    rejectDeferredMap(pendingOpenRequests, 'Sync client stopped.')
+    rejectDeferredMap(pendingStatusRequests, 'Sync client stopped.')
+    rejectDeferredMap(pendingFinalizations, 'Sync client stopped.')
     pendingTransactions.clear()
   }
 
@@ -882,6 +1010,8 @@ export function createSyncClient<TCollections extends object>(
 
     started = true
     stopped = false
+    browserOffline = browserRuntime.navigator?.onLine === false
+    attachBrowserNetworkListeners()
     void ensureSyncLocalStateTables(options.database).then(() => {
       connect()
     })
@@ -912,6 +1042,30 @@ function createDeferred<TValue>(): Deferred<TValue> {
     reject = nextReject
   })
   return { promise, resolve, reject }
+}
+
+function withTimeout<TValue>(
+  promise: Promise<TValue>,
+  timeoutMs: number,
+  onTimeout: () => void,
+  message: string,
+): Promise<TValue> {
+  return new Promise<TValue>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      onTimeout()
+      reject(new Error(message))
+    }, timeoutMs)
+
+    promise
+      .then((value) => {
+        clearTimeout(timeoutId)
+        resolve(value)
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId)
+        reject(error)
+      })
+  })
 }
 
 function defaultWebSocketFactory(url: string): SyncSocketLike {
