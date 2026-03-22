@@ -1423,12 +1423,13 @@ export function DataTable({
                 const isRowSelected = selectedRowKeys.has(rowKey)
                 const rowLockInfo = lockedRowsByKey[rowKey]
 
-                return (
+                const rowContent = (
                   <TableRow
                     key={`${tableName}-${rowKey}`}
                     className={cn(
                       'group',
                       isRowSelected && 'bg-accent',
+                      rowLockInfo && 'bg-amber-50/40 dark:bg-amber-950/20',
                     )}
                   >
                     {/* Checkbox cell */}
@@ -1437,7 +1438,6 @@ export function DataTable({
                         {rowLockInfo ? (
                           <span
                             className="text-amber-600"
-                            title={`Locked\n${rowLockInfo.title}`}
                             aria-label={`Locked row ${rowKey}`}
                           >
                             🔒
@@ -1458,56 +1458,77 @@ export function DataTable({
                       const isOpeningCell = openingCellKey === cellKey
 
                       return (
-                      <TableCell
-                        key={`${tableName}-${rowKey}-${columnName}`}
-                        className="font-mono text-xs"
-                        style={{
-                          width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
-                          minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
-                          maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
-                        }}
-                      >
-                        <div className="group/cell flex items-center justify-between gap-1">
-                          <span className={cn(
-                            'truncate',
-                            isOpeningCell && 'text-primary',
-                            readOnlyColumns.has(columnName) && 'text-muted-foreground',
-                          )}>
-                            {isOpeningCell
-                              ? 'locking...'
-                              : formatCellValue(getRowValue(row, columnName))}
-                          </span>
-                          <CellActionMenu
-                            value={formatCellValue(getRowValue(row, columnName))}
-                            columnName={columnName}
-                            isReadOnly={readOnlyColumns.has(columnName)}
-                            isEditLocked={Boolean(rowLockInfo)}
-                            editLockedReason={rowLockInfo?.title}
-                            canFilter={allIndexFields.has(columnName)}
-                            onEdit={() =>
-                              void startCellEdit(
-                                rowId,
-                                rowKey,
-                                columnName,
-                                formatCellValue(getRowValue(row, columnName)),
-                                Boolean(rowLockInfo),
-                              )
-                            }
-                            onView={() =>
-                              setViewerModal({
-                                columnName,
-                                value: formatCellValue(getRowValue(row, columnName)),
-                              })
-                            }
-                            onFilter={(operator, value) =>
-                              handlePrefillFilter(columnName, operator, value)
-                            }
-                          />
-                        </div>
-                      </TableCell>
-                    )})}
+                        <TableCell
+                          key={`${tableName}-${rowKey}-${columnName}`}
+                          className="font-mono text-xs"
+                          style={{
+                            width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                            minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
+                            maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                          }}
+                        >
+                          <div className="group/cell flex items-center justify-between gap-1">
+                            <span className={cn(
+                              'truncate',
+                              isOpeningCell && 'text-primary',
+                              readOnlyColumns.has(columnName) && 'text-muted-foreground',
+                            )}>
+                              {isOpeningCell
+                                ? 'locking...'
+                                : formatCellValue(getRowValue(row, columnName))}
+                            </span>
+                            <CellActionMenu
+                              value={formatCellValue(getRowValue(row, columnName))}
+                              columnName={columnName}
+                              isReadOnly={readOnlyColumns.has(columnName)}
+                              isEditLocked={Boolean(rowLockInfo)}
+                              editLockedReason={rowLockInfo?.title}
+                              canFilter={allIndexFields.has(columnName)}
+                              onEdit={() =>
+                                void startCellEdit(
+                                  rowId,
+                                  rowKey,
+                                  columnName,
+                                  formatCellValue(getRowValue(row, columnName)),
+                                  Boolean(rowLockInfo),
+                                )
+                              }
+                              onView={() =>
+                                setViewerModal({
+                                  columnName,
+                                  value: formatCellValue(getRowValue(row, columnName)),
+                                })
+                              }
+                              onFilter={(operator, value) =>
+                                handlePrefillFilter(columnName, operator, value)
+                              }
+                            />
+                          </div>
+                        </TableCell>
+                      )
+                    })}
                   </TableRow>
                 )
+
+                if (rowLockInfo) {
+                  return (
+                    <TooltipProvider key={`${tableName}-${rowKey}`} delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          {rowContent}
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs">
+                          <p>Locked by another client.</p>
+                          <p className="mt-1 whitespace-pre-line text-muted-foreground">
+                            {rowLockInfo.title}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )
+                }
+
+                return rowContent
               })}
             </TableBody>
           </Table>
