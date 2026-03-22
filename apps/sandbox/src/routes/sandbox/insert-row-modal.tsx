@@ -66,8 +66,8 @@ export function InsertRowModal({
 
   return (
     <Dialog open={modal !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent className="max-h-[calc(100vh-2rem)] max-w-[min(42rem,calc(100vw-2rem))] overflow-y-auto">
+        <DialogHeader className="min-w-0 pr-8">
           <DialogTitle>Add row to {modal.tableName}</DialogTitle>
           <DialogDescription>
             This row will be inserted through the generated sync mutation pipeline.
@@ -77,13 +77,13 @@ export function InsertRowModal({
         </DialogHeader>
 
         <form
-          className="space-y-4"
+          className="min-w-0 space-y-4"
           onSubmit={async (event) => {
             event.preventDefault()
             await onSubmit()
           }}
         >
-          <div className="grid gap-4">
+          <div className="grid min-w-0 gap-4">
             {editableColumns.map((column) => {
               const referenceColumn = workspace.getReferenceColumn(
                 modal.tableName,
@@ -101,14 +101,14 @@ export function InsertRowModal({
                 : []
 
               return (
-                <div key={column.name} className="grid gap-2">
+                <div key={column.name} className="grid min-w-0 gap-2">
                   <Label htmlFor={`insert-${column.name}`}>{column.name}</Label>
                   {referenceColumn ? (
                     <select
                       id={`insert-${column.name}`}
                       value={modal.draft[column.name] ?? ''}
                       onChange={(event) => onDraftChange(column.name, event.target.value)}
-                      className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                      className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
                     >
                       {referenceRows.length === 0 ? (
                         <option value="">No rows available</option>

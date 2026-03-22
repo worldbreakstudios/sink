@@ -10,6 +10,11 @@ import { serializeRowKey } from './sync-runtime-helpers.js'
 
 const ACTIVE_TRANSACTIONS_TABLE = '_sink_active_ws_transactions'
 const OFFLINE_QUEUE_TABLE = '_sink_offline_mutation_queue'
+const LEGACY_PROTOTYPE_TABLES = [
+  'prototype_offline_mutation_queue',
+  'prototype_client_state',
+  'prototype_active_ws_transactions',
+] as const
 
 const ensuredTables = new WeakMap<AsyncSqliteDatabase, Promise<void>>()
 
@@ -24,6 +29,10 @@ export async function ensureSyncLocalStateTables(
   }
 
   const promise = (async () => {
+    for (const legacyTableName of LEGACY_PROTOTYPE_TABLES) {
+      await database.execute(`DROP TABLE IF EXISTS "${legacyTableName}";`)
+    }
+
     await database.execute(
       `CREATE TABLE IF NOT EXISTS "${ACTIVE_TRANSACTIONS_TABLE}" (
         "clientId" TEXT,
