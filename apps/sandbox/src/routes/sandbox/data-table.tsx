@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,7 +19,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Tooltip,
   TooltipContent,
@@ -40,11 +39,10 @@ import {
 } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
+import { EditCellModal, type EditCellModalState } from './edit-cell-modal'
 import {
   formatCellValue,
   getRowValue,
-  isMultilineColumn,
-  isStructuredColumnType,
 } from './utils'
 import { ValueViewerModal } from './value-viewer-modal'
 
@@ -453,12 +451,8 @@ export function DataTable({
   }, [columnInfoMap])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
-    rowKey: string
-    columnName: string
-    value: string
-  } | null>(null)
+  } & EditCellModalState | null>(null)
   const [openingCellKey, setOpeningCellKey] = useState<string | null>(null)
-  const skipBlurCommitRef = useRef<string | null>(null)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [resizing, setResizing] = useState<{ columnName: string; startX: number; startWidth: number } | null>(null)
   const [columnOrder, setColumnOrder] = useState<string[]>([])
@@ -781,7 +775,6 @@ export function DataTable({
 
   const cancelCellEdit = useCallback(
     async (rowId: SqliteDemoId, rowKey: string, columnName: string) => {
-      skipBlurCommitRef.current = `${rowKey}:${columnName}`
       await onCellEditCancel(rowId, columnName)
 
       setEditingCell((currentCell) => {
@@ -817,8 +810,10 @@ export function DataTable({
 
         setEditingCell({
           rowId,
+          tableName,
           rowKey,
           columnName,
+          columnType: columnInfoMap[columnName]?.type ?? '',
           value,
         })
       } finally {
@@ -827,7 +822,7 @@ export function DataTable({
         )
       }
     },
-    [onCellEditStart],
+    [columnInfoMap, onCellEditStart, tableName],
   )
 
   const handleRun = useCallback(async () => {
@@ -1451,100 +1446,40 @@ export function DataTable({
                           maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
                         }}
                       >
-                        {editingCell?.rowKey === rowKey &&
-                        editingCell.columnName === columnName ? (
-                          isMultilineColumn(columnName) ||
-                          isStructuredColumnType(columnInfoMap[columnName]?.type ?? '') ? (
-                            <Textarea
-                              autoFocus
-                              value={editingCell.value}
-                              onChange={(event) =>
-                                setEditingCell({
-                                  rowId,
-                                  rowKey,
-                                  columnName,
-                                  value: event.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                skipBlurCommitRef.current === cellKey
-                                  ? (skipBlurCommitRef.current = null)
-                                  : commitCellEdit(rowId, columnName, editingCell.value)
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === 'Escape') {
-                                  event.preventDefault()
-                                  void cancelCellEdit(rowId, rowKey, columnName)
-                                }
-                              }}
-                              className="min-h-24"
-                            />
-                          ) : (
-                            <Input
-                              autoFocus
-                              value={editingCell.value}
-                              onChange={(event) =>
-                                setEditingCell({
-                                  rowId,
-                                  rowKey,
-                                  columnName,
-                                  value: event.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                skipBlurCommitRef.current === cellKey
-                                  ? (skipBlurCommitRef.current = null)
-                                  : commitCellEdit(rowId, columnName, editingCell.value)
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  commitCellEdit(rowId, columnName, editingCell.value)
-                                }
-
-                                if (event.key === 'Escape') {
-                                  event.preventDefault()
-                                  void cancelCellEdit(rowId, rowKey, columnName)
-                                }
-                              }}
-                              className="h-7 text-xs"
-                            />
-                          )
-                        ) : (
-                          <div className="group/cell flex items-center justify-between gap-1">
-                            <span className={cn(
-                              'truncate',
-                              isOpeningCell && 'text-primary',
-                              readOnlyColumns.has(columnName) && 'text-muted-foreground',
-                            )}>
-                              {isOpeningCell
-                                ? 'locking...'
-                                : formatCellValue(getRowValue(row, columnName))}
-                            </span>
-                            <CellActionMenu
-                              value={formatCellValue(getRowValue(row, columnName))}
-                              columnName={columnName}
-                              isReadOnly={readOnlyColumns.has(columnName)}
-                              canFilter={allIndexFields.has(columnName)}
-                              onEdit={() =>
-                                void startCellEdit(
-                                  rowId,
-                                  rowKey,
-                                  columnName,
-                                  formatCellValue(getRowValue(row, columnName)),
-                                )
-                              }
-                              onView={() =>
-                                setViewerModal({
-                                  columnName,
-                                  value: formatCellValue(getRowValue(row, columnName)),
-                                })
-                              }
-                              onFilter={(operator, value) =>
-                                handlePrefillFilter(columnName, operator, value)
-                              }
-                            />
-                          </div>
-                        )}
+                        <div className="group/cell flex items-center justify-between gap-1">
+                          <span className={cn(
+                            'truncate',
+                            isOpeningCell && 'text-primary',
+                            readOnlyColumns.has(columnName) && 'text-muted-foreground',
+                          )}>
+                            {isOpeningCell
+                              ? 'locking...'
+                              : formatCellValue(getRowValue(row, columnName))}
+                          </span>
+                          <CellActionMenu
+                            value={formatCellValue(getRowValue(row, columnName))}
+                            columnName={columnName}
+                            isReadOnly={readOnlyColumns.has(columnName)}
+                            canFilter={allIndexFields.has(columnName)}
+                            onEdit={() =>
+                              void startCellEdit(
+                                rowId,
+                                rowKey,
+                                columnName,
+                                formatCellValue(getRowValue(row, columnName)),
+                              )
+                            }
+                            onView={() =>
+                              setViewerModal({
+                                columnName,
+                                value: formatCellValue(getRowValue(row, columnName)),
+                              })
+                            }
+                            onFilter={(operator, value) =>
+                              handlePrefillFilter(columnName, operator, value)
+                            }
+                          />
+                        </div>
                       </TableCell>
                     )})}
                   </TableRow>
@@ -1554,6 +1489,43 @@ export function DataTable({
           </Table>
         )}
       </div>
+
+      <EditCellModal
+        modal={editingCell}
+        referenceColumn={
+          editingCell
+            ? referenceColumns[editingCell.columnName] ?? null
+            : null
+        }
+        onClose={() =>
+          editingCell
+            ? cancelCellEdit(
+                editingCell.rowId,
+                editingCell.rowKey,
+                editingCell.columnName,
+              )
+            : undefined
+        }
+        onSubmit={() =>
+          editingCell
+            ? commitCellEdit(
+                editingCell.rowId,
+                editingCell.columnName,
+                editingCell.value,
+              )
+            : Promise.resolve()
+        }
+        onValueChange={(value) =>
+          setEditingCell((currentCell) =>
+            currentCell === null
+              ? null
+              : {
+                  ...currentCell,
+                  value,
+                },
+          )
+        }
+      />
 
       {/* Value Viewer Modal */}
       <ValueViewerModal
