@@ -132,6 +132,7 @@ export function createSyncClient<TCollections extends object>(
   const createSocket = options.webSocketFactory ?? defaultWebSocketFactory
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000
   const transactionOpenTimeoutMs = Math.max(reconnectDelayMs * 2, 3000)
+  const transactionFinalizeTimeoutMs = Math.max(reconnectDelayMs * 8, 8000)
   const heldTransactionKeepAliveMs = Math.max(reconnectDelayMs * 4, 5000)
   const queryPath = options.queryPath ?? '/api/query'
   const listeners = new Set<() => void>()
@@ -419,10 +420,7 @@ export function createSyncClient<TCollections extends object>(
         }
 
         if (message.transactionId && pendingFinalizations.has(message.transactionId)) {
-          pendingFinalizations.get(message.transactionId)?.reject(
-            new Error(message.message),
-          )
-          pendingFinalizations.delete(message.transactionId)
+          await finalizeErroredTransaction(message.transactionId, message.message)
           return
         }
 
@@ -588,6 +586,24 @@ export function createSyncClient<TCollections extends object>(
     await refreshSnapshot()
   }
 
+  async function finalizeErroredTransaction(
+    transactionId: string,
+    message: string,
+  ): Promise<void> {
+    const context = pendingTransactions.get(transactionId)
+
+    context?.transaction?.rollback?.()
+
+    if (context && context.queueId === null) {
+      await removeActiveTransaction(options.database, transactionId)
+    }
+
+    pendingTransactions.delete(transactionId)
+    pendingFinalizations.get(transactionId)?.reject(new Error(message))
+    pendingFinalizations.delete(transactionId)
+    await refreshSnapshot()
+  }
+
   async function replayOfflineQueue(): Promise<void> {
     if (replayInProgress || !isSocketConnected()) {
       return
@@ -643,7 +659,16 @@ export function createSyncClient<TCollections extends object>(
         })
 
         try {
-          await waiter.promise
+          await withTimeout(
+            waiter.promise,
+            transactionFinalizeTimeoutMs,
+            () => {
+              markTransportUnavailable(
+                'Timed out waiting for the sync server to finalize a transaction.',
+              )
+            },
+            'Timed out waiting for the sync server to finalize a transaction.',
+          )
         } catch {
           break
         }
@@ -858,7 +883,16 @@ export function createSyncClient<TCollections extends object>(
     })
 
     await refreshSnapshot()
-    const finalMessage = await waiter.promise
+    const finalMessage = await withTimeout(
+      waiter.promise,
+      transactionFinalizeTimeoutMs,
+      () => {
+        markTransportUnavailable(
+          'Timed out waiting for the sync server to finalize a transaction.',
+        )
+      },
+      'Timed out waiting for the sync server to finalize a transaction.',
+    )
 
     if (finalMessage.type === 'txn_committed') {
       return localResult
@@ -1110,7 +1144,16 @@ export function createSyncClient<TCollections extends object>(
       force: true,
     })
 
-    await waiter.promise
+    await withTimeout(
+      waiter.promise,
+      transactionFinalizeTimeoutMs,
+      () => {
+        markTransportUnavailable(
+          'Timed out waiting for the sync server to finalize a transaction.',
+        )
+      },
+      'Timed out waiting for the sync server to finalize a transaction.',
+    )
     await replayOfflineQueue()
   }
 

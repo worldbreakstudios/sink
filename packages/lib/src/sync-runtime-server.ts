@@ -85,13 +85,14 @@ export async function createSyncServerRuntime<TAuthContext = unknown>(
       const authPromise = Promise.resolve(options.getAuthContext?.(request) as TAuthContext)
 
       connection.on('message', (payload) => {
+        const rawPayload = String(payload)
         void authPromise
-          .then((auth) => handleSocketMessage(connection, String(payload), auth))
+          .then((auth) => handleSocketMessage(connection, rawPayload, auth))
           .catch((error) => {
             options.onError?.(error)
             sendSocketMessage(connection, {
               type: 'error',
-              transactionId: null,
+              transactionId: getTransactionIdFromRawMessage(rawPayload),
               message: error instanceof Error ? error.message : String(error),
             })
           })
@@ -357,7 +358,17 @@ export async function createSyncServerRuntime<TAuthContext = unknown>(
             return
           }
 
-          throw error
+          await updateServerTransaction(options.database, message.transactionId, {
+            status: 'aborted',
+            updatedAt: Date.now(),
+          })
+          await options.adapter.release(message.transactionId)
+          sendSocketMessage(connection, {
+            type: 'error',
+            transactionId: message.transactionId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+          return
         }
       }
       case 'txn_status': {
@@ -445,6 +456,15 @@ class SyncConflictError<TValue = unknown> extends Error {
   constructor(serverResult: TValue) {
     super('Transaction result diverged from the local result.')
     this.serverResult = serverResult
+  }
+}
+
+function getTransactionIdFromRawMessage(rawMessage: string): string | null {
+  try {
+    const payload = parseSyncPayload<{ transactionId?: unknown }>(rawMessage)
+    return typeof payload.transactionId === 'string' ? payload.transactionId : null
+  } catch {
+    return null
   }
 }
 
