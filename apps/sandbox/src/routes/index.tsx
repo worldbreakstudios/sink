@@ -133,7 +133,8 @@ function App() {
   const [selectedTableName, setSelectedTableName] = useState<string>('')
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
   const [activeQuery, setActiveQuery] = useState<QueryState | null>(null)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
   const [deleteModal, setDeleteModal] = useState<{
@@ -770,6 +771,16 @@ function App() {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {!leftSidebarOpen && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLeftSidebarOpen(true)}
+                className="text-xs"
+              >
+                Show Tables
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -839,11 +850,14 @@ function App() {
         {sqliteState.status === 'ready' && selectedTable && (
           <div className="flex min-h-0 flex-1">
             {/* Left Sidebar - Tables */}
-            <TableSidebar
-              tables={tables}
-              selectedTableName={selectedTable.name}
-              onSelectTable={setSelectedTableName}
-            />
+            {leftSidebarOpen && (
+              <TableSidebar
+                tables={tables}
+                selectedTableName={selectedTable.name}
+                onSelectTable={setSelectedTableName}
+                onClose={() => setLeftSidebarOpen(false)}
+              />
+            )}
 
             {/* Center - Data Table */}
             <DataTable

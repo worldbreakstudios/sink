@@ -28,19 +28,43 @@ export function TableSidebar({
   selectedTableName,
   onSelectTable,
   onCreateTable,
+  onClose,
 }: {
   tables: SqliteTableSnapshot[]
   selectedTableName: string
   onSelectTable: (tableName: string) => void
   onCreateTable?: () => void
+  onClose?: () => void
 }) {
   return (
     <aside className="flex w-52 flex-col border-r bg-muted/30">
       {/* Header */}
-      <div className="border-b px-3 py-2">
+      <div className="flex items-center justify-between border-b px-3 py-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Tables
         </h2>
+        {onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Collapse tables sidebar"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+        ) : null}
       </div>
 
       {/* Table List */}
