@@ -771,16 +771,6 @@ function App() {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {!leftSidebarOpen && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setLeftSidebarOpen(true)}
-                className="text-xs"
-              >
-                Show Tables
-              </Button>
-            )}
             <Button
               variant="outline"
               size="sm"
@@ -803,16 +793,6 @@ function App() {
             >
               {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
             </Button>
-            {!rightSidebarOpen && selectedTable && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setRightSidebarOpen(true)}
-                className="text-xs"
-              >
-                Show Schema
-              </Button>
-            )}
             <ThemeToggle />
           </div>
         </header>
@@ -848,7 +828,15 @@ function App() {
         )}
 
         {sqliteState.status === 'ready' && selectedTable && (
-          <div className="flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1">
+            {!leftSidebarOpen && (
+              <SidebarRibbon
+                side="left"
+                label="Tables"
+                onClick={() => setLeftSidebarOpen(true)}
+              />
+            )}
+
             {/* Left Sidebar - Tables */}
             {leftSidebarOpen && (
               <TableSidebar
@@ -889,6 +877,14 @@ function App() {
               columns={selectedTable.columns}
               referenceColumns={selectedTableReferenceColumns}
             />
+
+            {!rightSidebarOpen && (
+              <SidebarRibbon
+                side="right"
+                label="Schema"
+                onClick={() => setRightSidebarOpen(true)}
+              />
+            )}
           </div>
         )}
 
@@ -916,6 +912,51 @@ function App() {
         />
       </div>
     </HotkeysProvider>
+  )
+}
+
+function SidebarRibbon({
+  side,
+  label,
+  onClick,
+}: {
+  side: 'left' | 'right'
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Open ${label.toLowerCase()} sidebar`}
+      className={[
+        'absolute top-1/2 z-20 flex h-24 w-8 -translate-y-1/2 items-center justify-center border bg-background/95 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground',
+        side === 'left'
+          ? 'left-0 rounded-r-lg border-l-0'
+          : 'right-0 rounded-l-lg border-r-0',
+      ].join(' ')}
+    >
+      <span className="-rotate-90 whitespace-nowrap text-xs font-medium">
+        <span className="mr-1.5 inline-flex align-middle">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <circle cx="7" cy="7" r="1.5" />
+            <circle cx="7" cy="12" r="1.5" />
+            <circle cx="7" cy="17" r="1.5" />
+            <circle cx="12" cy="7" r="1.5" />
+            <circle cx="12" cy="12" r="1.5" />
+            <circle cx="12" cy="17" r="1.5" />
+          </svg>
+        </span>
+        {label}
+      </span>
+    </button>
   )
 }
 
