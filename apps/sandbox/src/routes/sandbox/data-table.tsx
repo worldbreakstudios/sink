@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -51,6 +51,8 @@ const MIN_COLUMN_WIDTH = 50
 const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 const HISTORY_STORAGE_KEY = 'sandbox-query-history'
 const MAX_HISTORY_ITEMS = 50
+const CELL_FLASH_MS = 1400
+const REMOTE_UPDATE_PENDING_WINDOW_MS = 3000
 
 type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'isKnown' | 'isUnknown'
 type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
@@ -395,6 +397,7 @@ export function DataTable({
   rows,
   collections,
   queryResult,
+  remoteInvalidationAt,
   lockedRowsByKey,
   onCellEditStart,
   onCellEdit,
@@ -411,6 +414,7 @@ export function DataTable({
   rows: SqliteDemoRow[]
   collections: SchemaCollections | null
   queryResult: QueryResult | null
+  remoteInvalidationAt: number | null
   lockedRowsByKey: Record<string, { count: number; title: string }>
   onCellEditStart: (rowId: SqliteDemoId, columnName: string) => Promise<boolean>
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
@@ -473,6 +477,7 @@ export function DataTable({
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [flashingCellKeys, setFlashingCellKeys] = useState<Record<string, true>>({})
 
   // Value viewer modal state
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
@@ -488,6 +493,56 @@ export function DataTable({
     (row: SqliteDemoRow) =>
       serializeSqliteDemoKey(tableName as TableName, getRowId(row)),
     [getRowId, tableName],
+  )
+  const previousRowsRef = useRef<Map<string, SqliteDemoRow>>(new Map())
+  const flashTimeoutsRef = useRef<Map<string, number>>(new Map())
+  const pendingRemoteInvalidationRef = useRef<number | null>(null)
+  const pendingRemoteInvalidationDeadlineRef = useRef<number>(0)
+
+  const clearFlashTimeouts = useCallback(() => {
+    for (const timeoutId of flashTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId)
+    }
+    flashTimeoutsRef.current.clear()
+  }, [])
+
+  const scheduleCellFlash = useCallback(
+    (cellKeys: string[]) => {
+      if (cellKeys.length === 0) {
+        return
+      }
+
+      setFlashingCellKeys((currentKeys) => {
+        const nextKeys = { ...currentKeys }
+        for (const cellKey of cellKeys) {
+          nextKeys[cellKey] = true
+        }
+        return nextKeys
+      })
+
+      for (const cellKey of cellKeys) {
+        const existingTimeout = flashTimeoutsRef.current.get(cellKey)
+        if (existingTimeout !== undefined) {
+          window.clearTimeout(existingTimeout)
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          flashTimeoutsRef.current.delete(cellKey)
+          setFlashingCellKeys((currentKeys) => {
+            if (!(cellKey in currentKeys)) {
+              return currentKeys
+            }
+
+            const nextKeys = { ...currentKeys }
+            delete nextKeys[cellKey]
+            return nextKeys
+          })
+        }, CELL_FLASH_MS)
+
+        flashTimeoutsRef.current.set(cellKey, timeoutId)
+      }
+    },
+    [],
   )
 
   // Selection helpers
@@ -535,6 +590,85 @@ export function DataTable({
     const newColumns = defaultColumnNames.filter((name) => !validOrder.includes(name))
     return [...validOrder, ...newColumns]
   }, [columnOrder, defaultColumnNames])
+
+  useEffect(() => {
+    if (remoteInvalidationAt === null) {
+      return
+    }
+
+    pendingRemoteInvalidationRef.current = remoteInvalidationAt
+    pendingRemoteInvalidationDeadlineRef.current =
+      Date.now() + REMOTE_UPDATE_PENDING_WINDOW_MS
+  }, [remoteInvalidationAt])
+
+  useEffect(() => {
+    const previousRows = previousRowsRef.current
+    const nextRows = new Map(
+      displayRows.map((row) => [getSerializedRowId(row), row] as const),
+    )
+    const hasPendingRemoteInvalidation =
+      pendingRemoteInvalidationRef.current !== null &&
+      Date.now() <= pendingRemoteInvalidationDeadlineRef.current
+
+    if (
+      pendingRemoteInvalidationRef.current !== null &&
+      !hasPendingRemoteInvalidation
+    ) {
+      pendingRemoteInvalidationRef.current = null
+      pendingRemoteInvalidationDeadlineRef.current = 0
+    }
+
+    if (hasPendingRemoteInvalidation && previousRows.size > 0) {
+      const changedCellKeys: string[] = []
+
+      for (const row of displayRows) {
+        const rowKey = getSerializedRowId(row)
+        const previousRow = previousRows.get(rowKey)
+
+        if (!previousRow) {
+          for (const columnName of columnNames) {
+            changedCellKeys.push(`${rowKey}:${columnName}`)
+          }
+          continue
+        }
+
+        for (const columnName of columnNames) {
+          const previousValue = formatCellValue(
+            getRowValue(previousRow, columnName),
+          )
+          const nextValue = formatCellValue(getRowValue(row, columnName))
+
+          if (previousValue !== nextValue) {
+            changedCellKeys.push(`${rowKey}:${columnName}`)
+          }
+        }
+      }
+
+      if (changedCellKeys.length > 0) {
+        scheduleCellFlash(changedCellKeys)
+        pendingRemoteInvalidationRef.current = null
+        pendingRemoteInvalidationDeadlineRef.current = 0
+      }
+    }
+
+    previousRowsRef.current = nextRows
+  }, [columnNames, displayRows, getSerializedRowId, scheduleCellFlash])
+
+  useEffect(() => {
+    clearFlashTimeouts()
+    setFlashingCellKeys({})
+    previousRowsRef.current = new Map(
+      displayRows.map((row) => [getSerializedRowId(row), row] as const),
+    )
+    pendingRemoteInvalidationRef.current = null
+    pendingRemoteInvalidationDeadlineRef.current = 0
+  }, [clearFlashTimeouts, tableName])
+
+  useEffect(() => {
+    return () => {
+      clearFlashTimeouts()
+    }
+  }, [clearFlashTimeouts])
 
   // Get indexes for current table
   const tableIndexes = useMemo(() => {
@@ -1460,7 +1594,11 @@ export function DataTable({
                       return (
                         <TableCell
                           key={`${tableName}-${rowKey}-${columnName}`}
-                          className="font-mono text-xs"
+                          className={cn(
+                            'font-mono text-xs transition-colors duration-700',
+                            flashingCellKeys[cellKey] &&
+                              'bg-emerald-500/15 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.35)] dark:bg-emerald-400/15',
+                          )}
                           style={{
                             width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
                             minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,

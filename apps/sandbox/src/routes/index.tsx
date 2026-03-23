@@ -854,6 +854,7 @@ function App() {
               rows={tableRows}
               collections={workspace?.collections ?? null}
               queryResult={queryResult}
+              remoteInvalidationAt={syncSnapshot.lastInvalidationAt}
               lockedRowsByKey={lockedRowsByKey}
               onCellEditStart={handleCellEditStart}
               onCellEdit={handleCellEdit}
