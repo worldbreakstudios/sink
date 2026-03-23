@@ -1,157 +1,396 @@
 import type { AsyncSqliteDatabase } from '@sink/lib'
 
-const aliceActorId = '0d3cf6b9c81d41c8b8ad84c3550d0e62'
-const bobActorId = 'c24370ab27aa4a7d9a2f6d679c5f9d08'
-const textFieldTypeId = '6f8a2d9c4b7e1a3055d4f913a27be1c0'
-const richTextFieldTypeId = '2aa74d9e51c84f63b08d72ce4a19f6b2'
-const statusFieldTypeId = '1bd91f0a6c7e4d3fb185aa9246ce8f71'
-const noteObjectTypeId = '24a7c31ef20d4b68a15f77c2de983ab4'
-const taskObjectTypeId = '38e5d72ab904f36be21d44a89f0c6d3f'
-const inboxObjectId = '4ea96bf14cd82750a8d2e6719f43bc05'
-const taskObjectId = '57c9e20f34b8716ad2495ce30f8ab164'
-const titleFieldId = '68f1be24ad70953c41e28fd6bc3a0175'
-const bodyFieldId = '73a2d5f91c8e4067bb14de2559fa6c82'
-const statusFieldId = '8ce34a71d29540f6ab167e4c3d8bf025'
-const demoRowId = '9df6271b493d4b1ebed6e9442e680f11'
+const SANDBOX_FAKER_SEED = 20260322
+const SANDBOX_ACTOR_COUNT = 3
+const SANDBOX_OBJECT_TYPE_COUNT = 4
+const SANDBOX_OBJECTS_PER_ACTOR = 5
+const SANDBOX_DEMOS_PER_ACTOR = 4
+const SANDBOX_MANUAL_ID_TEST_COUNT = 6
 
-const inboxObjectCreatedAt = 1709748000000n
-const taskObjectCreatedAt = 1709748600000n
-const titleFieldCreatedAt = 1709748120000n
-const bodyFieldCreatedAt = 1709748180000n
-const statusFieldCreatedAt = 1709748720000n
-const demoCreatedAt = 1709748840000n
-const demoUpdatedAt = 1709748900000n
+type SeedRow = Record<string, unknown>
+type SeedDataset = {
+  actors: SeedRow[]
+  fieldTypes: SeedRow[]
+  objectTypes: SeedRow[]
+  objects: SeedRow[]
+  fields: SeedRow[]
+  demos: SeedRow[]
+  idManualTests: SeedRow[]
+}
 
 export async function ensureSandboxSeedData(
   db: AsyncSqliteDatabase,
 ): Promise<void> {
-  const existingRows = await db.query<{ count: number }>(
-    'SELECT COUNT(*) AS count FROM fieldTypes;',
-  )
+  const tableCounts = await readSandboxSeedCounts(db)
 
-  if ((existingRows[0]?.count ?? 0) === 0) {
-    await seedCoreData(db)
+  if (Object.values(tableCounts).every((count) => count > 0)) {
+    return
   }
 
-  const existingDemoRows = await db.query<{ count: number }>(
-    'SELECT COUNT(*) AS count FROM demos;',
-  )
+  const seedData = await buildSandboxSeedData(db)
 
-  if ((existingDemoRows[0]?.count ?? 0) === 0) {
-    await seedCodegenDemoTable(db)
+  await db.execute('BEGIN;')
+
+  try {
+    // Keep lookup/base tables ahead of dependent rows so FK inserts stay valid.
+    await insertRows(db, 'actors', seedData.actors)
+    await insertRows(db, 'fieldTypes', seedData.fieldTypes)
+    await insertRows(db, 'objectTypes', seedData.objectTypes)
+    await insertRows(db, 'objects', seedData.objects)
+    await insertRows(db, 'fields', seedData.fields)
+    await insertRows(db, 'demos', seedData.demos)
+    await insertRows(db, 'idManualTests', seedData.idManualTests)
+    await db.execute('COMMIT;')
+  } catch (error) {
+    await db.execute('ROLLBACK;')
+    throw error
   }
 }
 
-async function seedCoreData(db: AsyncSqliteDatabase): Promise<void> {
-  await db.execute(
-    `INSERT INTO actors (_id) VALUES (?), (?);`,
-    [aliceActorId, bobActorId],
-  )
+async function readSandboxSeedCounts(
+  db: AsyncSqliteDatabase,
+): Promise<Record<keyof SeedDataset, number>> {
+  const [
+    actors,
+    fieldTypes,
+    objectTypes,
+    objects,
+    fields,
+    demos,
+    idManualTests,
+  ] = await Promise.all([
+    countRows(db, 'actors'),
+    countRows(db, 'fieldTypes'),
+    countRows(db, 'objectTypes'),
+    countRows(db, 'objects'),
+    countRows(db, 'fields'),
+    countRows(db, 'demos'),
+    countRows(db, 'idManualTests'),
+  ])
 
-  await db.execute(
-    `INSERT INTO fieldTypes (_id, name) VALUES (?, ?), (?, ?), (?, ?);`,
-    [textFieldTypeId, 'text', richTextFieldTypeId, 'rich_text', statusFieldTypeId, 'status'],
-  )
-
-  await db.execute(
-    `INSERT INTO objectTypes (_id, name) VALUES (?, ?), (?, ?);`,
-    [noteObjectTypeId, 'note', taskObjectTypeId, 'task'],
-  )
-
-  await db.execute(
-    `INSERT INTO objects (_actor, _id, _createdAt, type_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?);`,
-    [
-      aliceActorId, inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId,
-      aliceActorId, taskObjectId, taskObjectCreatedAt, taskObjectTypeId,
-      bobActorId, inboxObjectId, inboxObjectCreatedAt, noteObjectTypeId,
-    ],
-  )
-
-  await db.execute(
-    `INSERT INTO fields (_actor, _id, _createdAt, object_id, field_type_id, name, body) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?);`,
-    [
-      aliceActorId, titleFieldId, titleFieldCreatedAt, inboxObjectId, textFieldTypeId, 'title', 'Welcome note title',
-      aliceActorId, bodyFieldId, bodyFieldCreatedAt, inboxObjectId, richTextFieldTypeId, 'body', 'Initial sandbox note body',
-      aliceActorId, statusFieldId, statusFieldCreatedAt, taskObjectId, statusFieldTypeId, 'status', 'open',
-    ],
-  )
+  return {
+    actors,
+    fieldTypes,
+    objectTypes,
+    objects,
+    fields,
+    demos,
+    idManualTests,
+  }
 }
 
-async function seedCodegenDemoTable(db: AsyncSqliteDatabase): Promise<void> {
-  await db.execute(
-    `INSERT INTO demos (
-      _actor,
-      _id,
-      _createdAt,
-      _updatedAt,
-      _archivedAt,
-      label,
-      count,
-      ratio,
-      is_active,
-      field_type_id,
-      object_id,
-      optional_object_id,
-      tags,
-      checkpoints,
-      settings,
-      translations,
-      default_status,
-      default_score,
-      default_flags,
-      optional_notes,
-      optional_feature_toggles
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-    [
-      aliceActorId,
-      demoRowId,
-      demoCreatedAt,
-      demoUpdatedAt,
-      null,
-      'All codegen types',
-      7,
-      0.875,
-      1,
-      richTextFieldTypeId,
-      inboxObjectId,
-      taskObjectId,
-      JSON.stringify(['demo', 'nested', 'codegen']),
-      JSON.stringify([
-        { label: 'Define schema', done: true, order: 1 },
-        { label: 'Generate types', done: true, order: 2 },
-        { label: 'Render in sandbox', done: false, order: 3 },
-      ]),
-      JSON.stringify({
-        layout: {
-          mode: 'stacked',
-          density: 'comfortable',
-        },
-        retries: 3,
-        showHints: true,
-        featuredFieldTypeId: textFieldTypeId,
-        thresholds: [0.25, 0.5, 0.75],
+async function countRows(
+  db: AsyncSqliteDatabase,
+  tableName: string,
+): Promise<number> {
+  const rows = await db.query<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM "${tableName}";`,
+  )
+
+  return rows[0]?.count ?? 0
+}
+
+async function buildSandboxSeedData(
+  db: AsyncSqliteDatabase,
+): Promise<SeedDataset> {
+  const { faker } = await import('@faker-js/faker')
+
+  faker.seed(SANDBOX_FAKER_SEED)
+
+  let timestampCursor = BigInt(Date.parse('2025-01-01T12:00:00.000Z'))
+  const nextTimestamp = (maxStepMinutes = 180): bigint => {
+    const value = timestampCursor
+    timestampCursor += BigInt(
+      faker.number.int({
+        min: 2,
+        max: maxStepMinutes,
+      }) * 60_000,
+    )
+    return value
+  }
+  const createId = (prefix?: string): string => {
+    const base = faker.string.alphanumeric({
+      length: 24,
+      casing: 'lower',
+    })
+
+    return prefix ? `${prefix}_${base}` : base
+  }
+  const createBaseRow = async (
+    tableName: keyof SeedDataset | 'actors',
+  ): Promise<SeedRow> => {
+    const row = (await db.createInsertableRow(tableName)) as SeedRow
+    return { ...row }
+  }
+
+  const actors = await Promise.all(
+    Array.from({ length: SANDBOX_ACTOR_COUNT }, async () => {
+      const row = await createBaseRow('actors')
+      row._id = createId('actor')
+      return row
+    }),
+  )
+
+  const fieldTypeLabels = [
+    'text',
+    'rich_text',
+    'status',
+    'priority',
+    'tag_set',
+  ]
+  const fieldTypes = await Promise.all(
+    fieldTypeLabels.map(async (name) => {
+      const row = await createBaseRow('fieldTypes')
+      row._id = createId('field_type')
+      row.name = name
+      return row
+    }),
+  )
+  const objectTypeNames = faker.helpers.uniqueArray(
+    () =>
+      faker.helpers.arrayElement([
+        `${faker.word.adjective()} ${faker.word.noun()}`,
+        faker.company.buzzNoun(),
+        faker.commerce.department(),
+      ]).toLowerCase(),
+    SANDBOX_OBJECT_TYPE_COUNT,
+  )
+  const objectTypes = await Promise.all(
+    objectTypeNames.map(async (name) => {
+      const row = await createBaseRow('objectTypes')
+      row._id = createId('object_type')
+      row.name = name
+      return row
+    }),
+  )
+
+  const objects: SeedRow[] = []
+
+  for (const actor of actors) {
+    for (let index = 0; index < SANDBOX_OBJECTS_PER_ACTOR; index += 1) {
+      const row = await createBaseRow('objects')
+      row._actor = actor._id
+      row._id = createId('object')
+      row._createdAt = nextTimestamp()
+      row.type_id = faker.helpers.arrayElement(objectTypes)._id
+      objects.push(row)
+    }
+  }
+
+  const statusChoices = ['draft', 'open', 'in_progress', 'done', 'blocked']
+  const priorityChoices = ['low', 'medium', 'high', 'urgent']
+  const fields: SeedRow[] = []
+
+  for (const objectRow of objects) {
+    const selectedFieldTypes = faker.helpers.arrayElements(
+      fieldTypes,
+      faker.number.int({
+        min: 2,
+        max: Math.min(4, fieldTypes.length),
       }),
-      JSON.stringify({
+    )
+
+    for (const fieldType of selectedFieldTypes) {
+      const row = await createBaseRow('fields')
+      row._actor = objectRow._actor
+      row._id = createId('field')
+      row._createdAt = nextTimestamp()
+      row.object_id = objectRow._id
+      row.field_type_id = fieldType._id
+      row.name = String(fieldType.name)
+
+      switch (fieldType.name) {
+        case 'status':
+          row.body = faker.helpers.arrayElement(statusChoices)
+          break
+        case 'priority':
+          row.body = faker.helpers.arrayElement(priorityChoices)
+          break
+        case 'tag_set':
+          row.body = faker.helpers.arrayElements(
+            ['alpha', 'beta', 'customer', 'internal', 'review'],
+            faker.number.int({ min: 1, max: 3 }),
+          ).join(', ')
+          break
+        case 'rich_text':
+          row.body = faker.lorem.paragraphs({ min: 1, max: 2 }, '\n\n')
+          break
+        default:
+          row.body = faker.lorem.sentence()
+          break
+      }
+
+      fields.push(row)
+    }
+  }
+
+  const demos: SeedRow[] = []
+
+  for (const actor of actors) {
+    const actorObjects = objects.filter((row) => row._actor === actor._id)
+
+    for (let index = 0; index < SANDBOX_DEMOS_PER_ACTOR; index += 1) {
+      const objectRow = faker.helpers.arrayElement(actorObjects)
+      const optionalObjectRow = faker.datatype.boolean(0.65)
+        ? faker.helpers.arrayElement(actorObjects)
+        : null
+      const createdAt = nextTimestamp()
+      const archived = faker.datatype.boolean(0.15)
+      const row = await createBaseRow('demos')
+
+      row._actor = actor._id
+      row._id = createId('demo')
+      row._createdAt = createdAt
+      row._updatedAt = createdAt + BigInt(faker.number.int({ min: 60_000, max: 21_600_000 }))
+      row._archivedAt = archived
+        ? createdAt + BigInt(faker.number.int({ min: 21_600_000, max: 172_800_000 }))
+        : null
+      row.label = `${faker.commerce.productName()} ${index + 1}`
+      row.count = faker.number.int({ min: 1, max: 100 })
+      row.ratio = Number(
+        faker.number.float({
+          min: 0.05,
+          max: 0.99,
+          fractionDigits: 3,
+        }).toFixed(3),
+      )
+      row.is_active = faker.datatype.boolean(0.7)
+      row.field_type_id = faker.helpers.arrayElement(fieldTypes)._id
+      row.object_id = objectRow._id
+      row.optional_object_id = optionalObjectRow?._id ?? null
+      row.tags = faker.helpers.uniqueArray(
+        () => faker.word.adjective().toLowerCase(),
+        faker.number.int({ min: 2, max: 4 }),
+      )
+      row.checkpoints = Array.from(
+        { length: faker.number.int({ min: 2, max: 4 }) },
+        (_unused, checkpointIndex) => ({
+          label: faker.hacker.verb(),
+          done: checkpointIndex === 0 || faker.datatype.boolean(0.35),
+          order: checkpointIndex + 1,
+        }),
+      )
+      row.settings = {
+        layout: {
+          mode: faker.helpers.arrayElement(['stacked', 'board', 'table']),
+          density: faker.helpers.arrayElement(['compact', 'comfortable', 'spacious']),
+        },
+        retries: faker.number.int({ min: 0, max: 5 }),
+        showHints: faker.datatype.boolean(0.6),
+        featuredFieldTypeId: faker.helpers.arrayElement(fieldTypes)._id,
+        thresholds: Array.from({ length: 3 }, () =>
+          Number(
+            faker.number.float({
+              min: 0.1,
+              max: 0.95,
+              fractionDigits: 2,
+            }).toFixed(2),
+          ),
+        ).sort((left, right) => left - right),
+      }
+      row.translations = {
         en: {
-          title: 'Codegen demo',
+          title: faker.company.catchPhrase(),
           enabled: true,
         },
         fr: {
-          title: 'Demo de generation',
-          enabled: false,
+          title: faker.company.buzzPhrase(),
+          enabled: faker.datatype.boolean(0.45),
         },
-      }),
-      'seeded',
-      0.98,
-      JSON.stringify({
-        archived: false,
-        pinned: true,
-      }),
-      JSON.stringify(['nullable array example', 'edit me as JSON']),
-      JSON.stringify({
-        beta: true,
-        compact: false,
-      }),
-    ],
+      }
+      row.default_status = faker.helpers.arrayElement(statusChoices)
+      row.default_score = Number(
+        faker.number.float({
+          min: 0.2,
+          max: 0.99,
+          fractionDigits: 2,
+        }).toFixed(2),
+      )
+      row.default_flags = {
+        archived,
+        pinned: faker.datatype.boolean(0.4),
+      }
+      row.optional_notes = faker.datatype.boolean(0.6)
+        ? faker.helpers.uniqueArray(
+            () => faker.lorem.words({ min: 2, max: 5 }),
+            faker.number.int({ min: 1, max: 3 }),
+          )
+        : null
+      row.optional_feature_toggles = faker.datatype.boolean(0.55)
+        ? {
+            beta: faker.datatype.boolean(),
+            compact: faker.datatype.boolean(),
+            experimentalSearch: faker.datatype.boolean(),
+          }
+        : null
+
+      demos.push(row)
+    }
+  }
+
+  const idManualTests = await Promise.all(
+    Array.from({ length: SANDBOX_MANUAL_ID_TEST_COUNT }, async () => {
+      const row = await createBaseRow('idManualTests')
+      row._id = `manual_${createId()}`
+      row.name = faker.person.fullName()
+      return row
+    }),
   )
+
+  return {
+    actors,
+    fieldTypes,
+    objectTypes,
+    objects,
+    fields,
+    demos,
+    idManualTests,
+  }
+}
+
+async function insertRows(
+  db: AsyncSqliteDatabase,
+  tableName: string,
+  rows: SeedRow[],
+): Promise<void> {
+  if (rows.length === 0) {
+    return
+  }
+
+  const columns = Object.keys(rows[0] ?? {})
+
+  if (columns.length === 0) {
+    return
+  }
+
+  const placeholderGroup = `(${columns.map(() => '?').join(', ')})`
+  const sql = `INSERT OR IGNORE INTO "${tableName}" (${columns
+    .map((columnName) => `"${columnName}"`)
+    .join(', ')}) VALUES ${rows.map(() => placeholderGroup).join(', ')};`
+  const bind = rows.flatMap((row) =>
+    columns.map((columnName) => toSqlBindValue(row[columnName])),
+  )
+
+  await db.execute(sql, bind)
+}
+
+function toSqlBindValue(value: unknown): string | number | bigint | Uint8Array | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0
+  }
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint' ||
+    value instanceof Uint8Array
+  ) {
+    return value
+  }
+
+  return JSON.stringify(value)
 }

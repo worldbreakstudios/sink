@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "3.51.2-build6",
-    "@tanstack/db": "^0.5.30"
+    "@tanstack/db": "^0.5.30",
+    "ws": "^8.18.3"
   }
 }
