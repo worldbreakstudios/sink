@@ -9,8 +9,8 @@ import {
   type SqliteIndexSnapshot,
   type SyncClientSnapshot,
 } from '@sink/lib'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   createSqliteDemoCollectionsWorkspace,
   getSqliteDemoRowKey,
@@ -39,8 +39,8 @@ import {
   type QueryResult,
   type QueryState,
   RightSidebar,
+  SettingsModal,
   TableSidebar,
-  ThemeToggle,
 } from './sandbox'
 
 export const Route = createFileRoute('/')({
@@ -145,6 +145,7 @@ function App() {
   const [isDeletingRows, setIsDeletingRows] = useState(false)
   const [isClearingLocal, setIsClearingLocal] = useState(false)
   const [isResettingServer, setIsResettingServer] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [serverLocks, setServerLocks] = useState<DemoServerLock[]>([])
 
   const refreshSnapshot = useCallback(
@@ -642,12 +643,6 @@ function App() {
     }
   }, [deleteModal, refreshSnapshot, workspace])
 
-  const persistenceBadgeVariant = workspace?.persistenceType === 'opfs'
-    ? 'default'
-    : workspace?.persistenceType === 'localStorage'
-      ? 'secondary'
-      : 'outline'
-
   const handleRunQuery = useCallback(async (query: QueryState) => {
     setActiveQuery(query)
   }, [])
@@ -732,103 +727,95 @@ function App() {
 
   return (
     <HotkeysProvider>
-      <div className="flex h-screen flex-col bg-background">
-        {/* Top Header Bar */}
-        <header className="flex min-h-12 shrink-0 items-center justify-between border-b px-4 py-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-sm font-semibold">SQLite Sandbox</h1>
-            {workspace && (
-              <Badge variant={persistenceBadgeVariant} className="text-xs">
-                {workspace.persistenceType.toUpperCase()}
-              </Badge>
-            )}
-            <Badge variant={syncSnapshot.connection === 'connected' ? 'default' : 'secondary'}>
-              {syncSnapshot.connection}
-            </Badge>
-            {browserTabId && (
-              <Badge variant="outline" className="text-xs">
-                tab {browserTabId}
-              </Badge>
-            )}
-            <Badge variant="outline" className="text-xs">
-              active {syncSnapshot.activeTransactions}
-            </Badge>
-            <Badge variant="outline" className="text-xs">
-              queue {syncSnapshot.offlineQueue}
-            </Badge>
-            <Badge variant="outline" className="text-xs">
-              locks {Object.keys(lockedRowsByKey).length}
-            </Badge>
-            {syncSnapshot.conflicts.length > 0 && (
-              <Badge variant="destructive" className="text-xs">
-                conflicts {syncSnapshot.conflicts.length}
-              </Badge>
-            )}
-            {sqliteState.data?.version && (
-              <span className="text-xs text-muted-foreground">
-                SQLite {sqliteState.data.version}
-              </span>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex h-screen flex-col bg-background text-foreground">
+        <header className="shrink-0 border-b bg-card/80 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/70">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="font-heading text-base font-semibold tracking-tight">
+                SQLite Sandbox
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Generated sync runtime playground
+              </p>
+            </div>
             <Button
               variant="outline"
               size="sm"
-              className="border-red-300 text-xs text-red-700 hover:bg-red-50 hover:text-red-800"
-              disabled={isClearingLocal || isResettingServer}
-              onClick={() => {
-                void handleHardClearLocal()
-              }}
+              onClick={() => setSettingsOpen(true)}
+              className="gap-2 rounded-xl"
             >
-              {isClearingLocal ? 'Clearing Local DB…' : 'Hard Clear Local DB'}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2v4" />
+                <path d="M12 18v4" />
+                <path d="m4.93 4.93 2.83 2.83" />
+                <path d="m16.24 16.24 2.83 2.83" />
+                <path d="M2 12h4" />
+                <path d="M18 12h4" />
+                <path d="m4.93 19.07 2.83-2.83" />
+                <path d="m16.24 7.76 2.83-2.83" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              Settings
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-orange-300 text-xs text-orange-700 hover:bg-orange-50 hover:text-orange-800"
-              disabled={isClearingLocal || isResettingServer}
-              onClick={() => {
-                void handleHardResetServer()
-              }}
-            >
-              {isResettingServer ? 'Resetting Demo Server…' : 'Hard Reset Demo Server'}
-            </Button>
-            <ThemeToggle />
           </div>
         </header>
 
-        {/* Error Banner */}
         {actionError && (
-          <div className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            {actionError}
+          <div className="shrink-0 border-b bg-card/50 px-4 py-3">
+            <Card className="border-amber-300/70 bg-amber-50/80 text-amber-950 shadow-none dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-100">
+              <CardContent className="px-4 py-3 text-sm">{actionError}</CardContent>
+            </Card>
           </div>
         )}
         {resetError && (
-          <div className="shrink-0 border-b border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
-            {resetError}
+          <div className="shrink-0 border-b bg-card/50 px-4 py-3">
+            <Card className="border-orange-300/70 bg-orange-50/80 text-orange-950 shadow-none dark:border-orange-800 dark:bg-orange-950/70 dark:text-orange-100">
+              <CardContent className="px-4 py-3 text-sm">{resetError}</CardContent>
+            </Card>
           </div>
         )}
         {syncSnapshot.lastError && syncSnapshot.connection !== 'connected' && (
-          <div className="shrink-0 border-b border-muted bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
-            Sync status: {syncSnapshot.lastError}
+          <div className="shrink-0 border-b bg-card/50 px-4 py-3">
+            <Card className="border-border/70 bg-muted/40 shadow-none">
+              <CardContent className="px-4 py-3 text-sm text-muted-foreground">
+                Sync status: {syncSnapshot.lastError}
+              </CardContent>
+            </Card>
           </div>
         )}
 
-        {/* Main Content */}
         {sqliteState.status === 'loading' && (
-          <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground">
-            Loading synced SQLite workspace...
+          <div className="flex flex-1 items-center justify-center px-4">
+            <Card className="w-full max-w-md border-border/70 bg-card/80 shadow-sm">
+              <CardContent className="px-6 py-8 text-center text-sm text-muted-foreground">
+                Loading synced SQLite workspace...
+              </CardContent>
+            </Card>
           </div>
         )}
 
         {sqliteState.status === 'error' && (
-          <div className="flex flex-1 items-center justify-center px-4 text-sm text-destructive">
-            {sqliteState.error}
+          <div className="flex flex-1 items-center justify-center px-4">
+            <Card className="w-full max-w-md border-destructive/40 bg-card shadow-sm">
+              <CardContent className="px-6 py-8 text-center text-sm text-destructive">
+                {sqliteState.error}
+              </CardContent>
+            </Card>
           </div>
         )}
 
         {sqliteState.status === 'ready' && selectedTable && (
-          <div className="relative flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1 bg-muted/20">
             {!leftSidebarOpen && (
               <SidebarRibbon
                 side="left"
@@ -911,6 +898,31 @@ function App() {
           onClose={handleDeleteModalClose}
           onConfirm={handleDeleteConfirm}
         />
+
+        <SettingsModal
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          isClearingLocal={isClearingLocal}
+          isResettingServer={isResettingServer}
+          onHardClearLocal={() => {
+            void handleHardClearLocal()
+          }}
+          onHardResetServer={() => {
+            void handleHardResetServer()
+          }}
+          debug={{
+            persistenceType: workspace?.persistenceType ?? null,
+            connection: syncSnapshot.connection,
+            tabId: browserTabId,
+            activeTransactions: syncSnapshot.activeTransactions,
+            offlineQueue: syncSnapshot.offlineQueue,
+            locks: Object.keys(lockedRowsByKey).length,
+            conflicts: syncSnapshot.conflicts.length,
+            sqliteVersion: sqliteState.data?.version ?? null,
+            serverUrl: resolveSqliteDemoServerUrl(),
+            lastError: syncSnapshot.lastError,
+          }}
+        />
       </div>
     </HotkeysProvider>
   )
@@ -926,18 +938,19 @@ function SidebarRibbon({
   onClick: () => void
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
+      size="sm"
       onClick={onClick}
       aria-label={`Open ${label.toLowerCase()} sidebar`}
       className={[
-        'absolute top-1/2 z-20 flex h-24 w-8 -translate-y-1/2 items-center justify-center border bg-background/95 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground',
+        'absolute top-1/2 z-20 h-24 w-8 -translate-y-1/2 rounded-none border bg-card/95 px-0 py-0 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-accent-foreground',
         side === 'left'
-          ? 'left-0 rounded-r-lg border-l-0'
-          : 'right-0 rounded-l-lg border-r-0',
+          ? 'left-0 rounded-r-2xl border-l-0'
+          : 'right-0 rounded-l-2xl border-r-0',
       ].join(' ')}
     >
-      <span className="-rotate-90 whitespace-nowrap text-xs font-medium">
+      <span className="-rotate-90 whitespace-nowrap text-[11px] font-medium">
         <span className="mr-1.5 inline-flex align-middle">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -957,7 +970,7 @@ function SidebarRibbon({
         </span>
         {label}
       </span>
-    </button>
+    </Button>
   )
 }
 

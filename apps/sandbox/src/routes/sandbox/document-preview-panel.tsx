@@ -1,5 +1,8 @@
 import { useState, useCallback } from 'react'
 import type { SqliteReferenceColumn } from '@sink/lib'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 import { SCHEMA_VALIDATORS, type TableName } from '@/data/generated/schema.gen'
 import { cn } from '@/lib/utils'
 import {
@@ -36,12 +39,14 @@ function CopyButton({ text }: { text: string }) {
   }, [text])
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon"
       onClick={handleCopy}
       className={cn(
-        'shrink-0 rounded p-1',
-        'hover:bg-muted',
+        'size-7 shrink-0',
+        'hover:bg-accent',
         copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground hover:text-foreground',
       )}
       aria-label="Copy value"
@@ -56,7 +61,7 @@ function CopyButton({ text }: { text: string }) {
           <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
         </svg>
       )}
-    </button>
+    </Button>
   )
 }
 
@@ -129,12 +134,14 @@ function MultiValueCopyButton({
     <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={handleCopy}
             className={cn(
-              'shrink-0 rounded p-1',
-              'hover:bg-muted',
+              'size-7 shrink-0',
+              'hover:bg-accent',
               copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground hover:text-foreground',
             )}
             aria-label={`Copy '${columnName}' for selected documents`}
@@ -149,7 +156,7 @@ function MultiValueCopyButton({
                 <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
               </svg>
             )}
-          </button>
+          </Button>
         </TooltipTrigger>
         <TooltipContent side="left">
           <p className="text-xs">Copy '{columnName}' for selected documents</p>
@@ -174,16 +181,18 @@ export function DocumentPreviewPanel({
     )
     return (
       <div className="space-y-2">
-        <p className="text-xs text-muted-foreground mb-3">
-          Document <code className="rounded bg-muted px-1">{rowKeyLabel}</code>
-        </p>
+        <div className="mb-3 flex items-center gap-2">
+          <Badge variant="secondary">Document</Badge>
+          <code className="rounded-md bg-muted px-2 py-1">{rowKeyLabel}</code>
+        </div>
         {columns.map((column) => {
           const value = getRowValue(row, column.name)
           const formattedValue = formatCellValue(value)
           const validator = getColumnValidator(tableName, column.name, column, referenceColumns)
 
           return (
-            <div key={column.name} className="rounded-md border bg-card p-3">
+            <Card key={column.name} className="rounded-2xl border-border/70 bg-card/80 shadow-none">
+              <CardContent className="p-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-medium text-muted-foreground">{column.name}</span>
                 <div className="flex items-center gap-1">
@@ -194,7 +203,8 @@ export function DocumentPreviewPanel({
               <pre className="text-sm font-mono break-all whitespace-pre-wrap max-h-32 overflow-auto">
                 {formattedValue}
               </pre>
-            </div>
+              </CardContent>
+            </Card>
           )
         })}
       </div>
@@ -204,14 +214,15 @@ export function DocumentPreviewPanel({
   // Multiple documents view
   return (
     <div className="space-y-2">
-      <p className="whitespace-nowrap text-xs text-muted-foreground mb-3">
-        <span className="font-medium">{rows.length} documents</span> selected
-      </p>
+      <Badge variant="secondary" className="mb-3 whitespace-nowrap">
+        {rows.length} documents selected
+      </Badge>
       {columns.map((column) => {
         const validator = getColumnValidator(tableName, column.name, column, referenceColumns)
 
         return (
-          <div key={column.name} className="rounded-md border bg-card p-3">
+          <Card key={column.name} className="rounded-2xl border-border/70 bg-card/80 shadow-none">
+            <CardContent className="p-3">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-medium text-muted-foreground">{column.name}</span>
               <div className="flex items-center gap-1">
@@ -220,7 +231,8 @@ export function DocumentPreviewPanel({
               </div>
             </div>
             <span className="text-sm text-muted-foreground italic">multiple values</span>
-          </div>
+            </CardContent>
+          </Card>
         )
       })}
     </div>

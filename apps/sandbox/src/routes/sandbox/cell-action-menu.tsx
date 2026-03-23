@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,11 +58,12 @@ export function CellActionMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon"
           className={cn(
-            'shrink-0 rounded p-0.5 opacity-0 group-hover/cell:opacity-100 focus:opacity-100',
-            'text-muted-foreground hover:text-foreground hover:bg-muted',
+            'size-7 shrink-0 opacity-0 group-hover/cell:opacity-100 focus:opacity-100',
+            'text-muted-foreground hover:text-foreground',
           )}
           onClick={(e) => e.stopPropagation()}
         >
@@ -80,7 +82,7 @@ export function CellActionMenu({
             <circle cx="12" cy="5" r="1" />
             <circle cx="12" cy="19" r="1" />
           </svg>
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48" onClick={(e) => e.stopPropagation()}>
         <DropdownMenuItem onClick={onView}>

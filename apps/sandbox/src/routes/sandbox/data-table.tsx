@@ -1192,33 +1192,34 @@ export function DataTable({
 
       {/* Filter Panel */}
       {filterOpen && (
-        <div className="border-b bg-muted/30">
-          {/* Tabs */}
-          <div className="flex items-center gap-1 border-b px-4">
-            <button
-              type="button"
+        <div className="border-b bg-card/70 backdrop-blur-sm">
+          <div className="flex items-center gap-2 border-b px-4 py-2">
+            <Button
+              variant={activeTab === 'filters' ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setActiveTab('filters')}
               className={cn(
-                'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                'rounded-lg',
                 activeTab === 'filters'
-                  ? 'border-primary text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'text-muted-foreground',
               )}
             >
               Filters
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant={activeTab === 'history' ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setActiveTab('history')}
               className={cn(
-                'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                'rounded-lg',
                 activeTab === 'history'
-                  ? 'border-primary text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'text-muted-foreground',
               )}
             >
               History {history.length > 0 && `(${history.length})`}
-            </button>
+            </Button>
           </div>
 
           {activeTab === 'filters' && (

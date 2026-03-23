@@ -15,6 +15,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import type {
   SqliteDemoCollectionsWorkspace,
@@ -141,33 +148,57 @@ export function InsertRowModal({
                 <div key={column.name} className="grid min-w-0 gap-2">
                   <Label htmlFor={`insert-${column.name}`}>{column.name}</Label>
                   {referenceColumn ? (
-                    <select
-                      id={`insert-${column.name}`}
-                      value={modal.draft[column.name] ?? ''}
-                      onChange={(event) => onDraftChange(column.name, event.target.value)}
-                      className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                    <Select
+                      value={
+                        modal.draft[column.name] !== ''
+                          ? modal.draft[column.name]
+                          : column.notnull
+                            ? undefined
+                            : '__empty__'
+                      }
+                      onValueChange={(nextValue) =>
+                        onDraftChange(
+                          column.name,
+                          nextValue === '__empty__' ? '' : nextValue,
+                        )
+                      }
+                      disabled={referenceRows.length === 0}
                     >
-                      {referenceRows.length === 0 ? (
-                        <option value="">No rows available</option>
-                      ) : null}
-                      {referenceRows.map((row) => (
-                        <option
-                          key={serializeSqliteDemoKey(
-                            referenceColumn.referencedTable as TableName,
-                            getSqliteDemoRowKey(
+                      <SelectTrigger
+                        id={`insert-${column.name}`}
+                        className="w-full min-w-0"
+                      >
+                        <SelectValue
+                          placeholder={
+                            referenceRows.length === 0
+                              ? 'No rows available'
+                              : 'Select a row'
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {!column.notnull && (
+                          <SelectItem value="__empty__">(none)</SelectItem>
+                        )}
+                        {referenceRows.map((row) => (
+                          <SelectItem
+                            key={serializeSqliteDemoKey(
+                              referenceColumn.referencedTable as TableName,
+                              getSqliteDemoRowKey(
+                                referenceColumn.referencedTable as TableName,
+                                row,
+                              ),
+                            )}
+                            value={String(row._id)}
+                          >
+                            {formatReferenceOptionLabel(
                               referenceColumn.referencedTable as TableName,
                               row,
-                            ),
-                          )}
-                          value={String(row._id)}
-                        >
-                          {formatReferenceOptionLabel(
-                            referenceColumn.referencedTable as TableName,
-                            row,
-                          )}
-                        </option>
-                      ))}
-                    </select>
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   ) : isMultilineColumn(column.name) || isStructuredColumnType(column.type) ? (
                     <Textarea
                       id={`insert-${column.name}`}
