@@ -1112,7 +1112,7 @@ export function DataTable({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Table Header */}
-      <div className="flex items-center justify-between border-b bg-background px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border/80 bg-card/80 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/70">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">{tableName}</h1>
           <span className="whitespace-nowrap text-sm text-muted-foreground">
