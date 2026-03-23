@@ -1566,7 +1566,7 @@ export function DataTable({
                     key={`${tableName}-${rowKey}`}
                     className={cn(
                       'group',
-                      isRowSelected && 'bg-accent',
+                      isRowSelected && 'bg-primary/[0.08] dark:bg-primary/[0.12]',
                       rowLockInfo && 'bg-amber-50/40 dark:bg-amber-950/20',
                     )}
                   >
@@ -1574,7 +1574,7 @@ export function DataTable({
                     <TableCell
                       className={cn(
                         'sticky left-0 z-20 w-16 min-w-16 border-r border-border/80 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/90',
-                        isRowSelected && 'bg-accent',
+                        isRowSelected && 'bg-primary/[0.08] dark:bg-primary/[0.12]',
                         rowLockInfo
                           ? 'bg-amber-50/90 dark:bg-amber-950/60'
                           : 'bg-background/95',

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 type Theme = 'light' | 'dark' | 'system'
 
-const STORAGE_KEY = 'sandbox-theme'
+export const STORAGE_KEY = 'sandbox-theme'
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light'
