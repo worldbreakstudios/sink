@@ -1501,12 +1501,15 @@ export function DataTable({
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {/* Checkbox column */}
-                <TableHead className="w-10 px-3">
-                  <Checkbox
-                    checked={isAllSelected ? true : isSomeSelected ? 'indeterminate' : false}
-                    onCheckedChange={toggleAllSelection}
-                    aria-label="Select all"
-                  />
+                <TableHead className="sticky left-0 top-0 z-30 w-16 min-w-16 border-r border-border/80 bg-card/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-card/90">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="inline-block w-4" aria-hidden="true" />
+                    <Checkbox
+                      checked={isAllSelected ? true : isSomeSelected ? 'indeterminate' : false}
+                      onCheckedChange={toggleAllSelection}
+                      aria-label="Select all"
+                    />
+                  </div>
                 </TableHead>
                 {columnNames.map((columnName) => (
                   <TableHead
@@ -1568,8 +1571,16 @@ export function DataTable({
                     )}
                   >
                     {/* Checkbox cell */}
-                    <TableCell className="w-14 px-3">
-                      <div className="flex items-center gap-2">
+                    <TableCell
+                      className={cn(
+                        'sticky left-0 z-20 w-16 min-w-16 border-r border-border/80 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/90',
+                        isRowSelected && 'bg-accent',
+                        rowLockInfo
+                          ? 'bg-amber-50/90 dark:bg-amber-950/60'
+                          : 'bg-background/95',
+                      )}
+                    >
+                      <div className="flex items-center justify-center gap-2">
                         {rowLockInfo ? (
                           <span
                             className="text-amber-600"

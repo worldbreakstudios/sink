@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLiveQuery } from '@tanstack/react-db'
 import { HotkeysProvider } from '@tanstack/react-hotkeys'
@@ -130,6 +138,9 @@ function App() {
   }>({ status: 'loading' })
   const [actionError, setActionError] = useState<string | null>(null)
   const [resetError, setResetError] = useState<string | null>(null)
+  const [dismissedActionError, setDismissedActionError] = useState<string | null>(null)
+  const [dismissedResetError, setDismissedResetError] = useState<string | null>(null)
+  const [dismissedSyncError, setDismissedSyncError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string>('')
   const [insertModal, setInsertModal] = useState<InsertModalState | null>(null)
   const [selectedTableIndexes, setSelectedTableIndexes] = useState<SqliteIndexSnapshot[]>([])
@@ -247,10 +258,28 @@ function App() {
     }
   }, [workspace])
 
+  useEffect(() => {
+    if (actionError === null) {
+      setDismissedActionError(null)
+    }
+  }, [actionError])
+
+  useEffect(() => {
+    if (resetError === null) {
+      setDismissedResetError(null)
+    }
+  }, [resetError])
+
   const syncSnapshot = useSyncExternalStore(
     workspace?.syncClient.subscribe ?? (() => () => {}),
     workspace?.syncClient.getSnapshot ?? (() => emptySyncSnapshot),
   )
+
+  useEffect(() => {
+    if (syncSnapshot.lastError === null || syncSnapshot.connection === 'connected') {
+      setDismissedSyncError(null)
+    }
+  }, [syncSnapshot.connection, syncSnapshot.lastError])
 
   const tables = sqliteState.data?.tables ?? []
   const selectedTable = useMemo(
@@ -770,27 +799,36 @@ function App() {
           </div>
         </header>
 
-        {actionError && (
+        {actionError && actionError !== dismissedActionError && (
           <div className="shrink-0 border-b bg-card/50 px-4 py-3">
-            <Card className="border-amber-300/70 bg-amber-50/80 text-amber-950 shadow-none dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-100">
-              <CardContent className="px-4 py-3 text-sm">{actionError}</CardContent>
-            </Card>
+            <DismissibleBanner
+              className="border-amber-300/70 bg-amber-50/80 text-amber-950 dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-100"
+              onDismiss={() => setDismissedActionError(actionError)}
+            >
+              {actionError}
+            </DismissibleBanner>
           </div>
         )}
-        {resetError && (
+        {resetError && resetError !== dismissedResetError && (
           <div className="shrink-0 border-b bg-card/50 px-4 py-3">
-            <Card className="border-orange-300/70 bg-orange-50/80 text-orange-950 shadow-none dark:border-orange-800 dark:bg-orange-950/70 dark:text-orange-100">
-              <CardContent className="px-4 py-3 text-sm">{resetError}</CardContent>
-            </Card>
+            <DismissibleBanner
+              className="border-orange-300/70 bg-orange-50/80 text-orange-950 dark:border-orange-800 dark:bg-orange-950/70 dark:text-orange-100"
+              onDismiss={() => setDismissedResetError(resetError)}
+            >
+              {resetError}
+            </DismissibleBanner>
           </div>
         )}
-        {syncSnapshot.lastError && syncSnapshot.connection !== 'connected' && (
+        {syncSnapshot.lastError &&
+          syncSnapshot.connection !== 'connected' &&
+          syncSnapshot.lastError !== dismissedSyncError && (
           <div className="shrink-0 border-b bg-card/50 px-4 py-3">
-            <Card className="border-border/70 bg-muted/40 shadow-none">
-              <CardContent className="px-4 py-3 text-sm text-muted-foreground">
+            <DismissibleBanner
+              className="border-border/70 bg-muted/40 text-muted-foreground"
+              onDismiss={() => setDismissedSyncError(syncSnapshot.lastError)}
+            >
                 Sync status: {syncSnapshot.lastError}
-              </CardContent>
-            </Card>
+            </DismissibleBanner>
           </div>
         )}
 
@@ -944,7 +982,7 @@ function SidebarRibbon({
       onClick={onClick}
       aria-label={`Open ${label.toLowerCase()} sidebar`}
       className={[
-        'absolute top-1/2 z-20 h-24 w-8 -translate-y-1/2 rounded-none border bg-card/95 px-0 py-0 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-accent-foreground',
+        'absolute top-1/2 z-50 h-24 w-8 -translate-y-1/2 rounded-none border bg-card/95 px-0 py-0 text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-accent-foreground',
         side === 'left'
           ? 'left-0 rounded-r-2xl border-l-0'
           : 'right-0 rounded-l-2xl border-r-0',
@@ -971,6 +1009,48 @@ function SidebarRibbon({
         {label}
       </span>
     </Button>
+  )
+}
+
+function DismissibleBanner({
+  children,
+  className,
+  onDismiss,
+}: {
+  children: ReactNode
+  className?: string
+  onDismiss: () => void
+}) {
+  return (
+    <Card className={['shadow-none', className].filter(Boolean).join(' ')}>
+      <CardContent className="flex items-start gap-3 px-4 py-3">
+        <div className="min-w-0 flex-1 text-sm">{children}</div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onDismiss}
+          aria-label="Dismiss warning"
+          className="h-7 w-7 shrink-0 rounded-md text-current hover:bg-black/5 dark:hover:bg-white/10"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </Button>
+      </CardContent>
+    </Card>
   )
 }
 
