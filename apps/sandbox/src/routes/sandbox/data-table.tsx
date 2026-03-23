@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,7 +19,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Tooltip,
   TooltipContent,
@@ -40,11 +39,10 @@ import {
 } from '@/lib/sqlite-demo-collections'
 import { cn } from '@/lib/utils'
 import { CellActionMenu } from './cell-action-menu'
+import { EditCellModal, type EditCellModalState } from './edit-cell-modal'
 import {
   formatCellValue,
   getRowValue,
-  isMultilineColumn,
-  isStructuredColumnType,
 } from './utils'
 import { ValueViewerModal } from './value-viewer-modal'
 
@@ -53,6 +51,8 @@ const MIN_COLUMN_WIDTH = 50
 const STORAGE_KEY_PREFIX = 'sandbox-table-layout:'
 const HISTORY_STORAGE_KEY = 'sandbox-query-history'
 const MAX_HISTORY_ITEMS = 50
+const CELL_FLASH_MS = 1400
+const REMOTE_UPDATE_PENDING_WINDOW_MS = 3000
 
 type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'isKnown' | 'isUnknown'
 type QueryMethod = 'collect' | 'first' | 'unique' | 'take'
@@ -397,7 +397,11 @@ export function DataTable({
   rows,
   collections,
   queryResult,
+  remoteInvalidationAt,
+  lockedRowsByKey,
+  onCellEditStart,
   onCellEdit,
+  onCellEditCancel,
   onAddRow,
   onDeleteSelected,
   onClearQuery,
@@ -410,7 +414,11 @@ export function DataTable({
   rows: SqliteDemoRow[]
   collections: SchemaCollections | null
   queryResult: QueryResult | null
+  remoteInvalidationAt: number | null
+  lockedRowsByKey: Record<string, { count: number; title: string }>
+  onCellEditStart: (rowId: SqliteDemoId, columnName: string) => Promise<boolean>
   onCellEdit: (rowId: SqliteDemoId, columnName: string, value: string) => Promise<void>
+  onCellEditCancel: (rowId: SqliteDemoId, columnName: string) => Promise<void>
   onAddRow: () => void
   onDeleteSelected?: (rowKeys: string[]) => Promise<void>
   onClearQuery?: () => void
@@ -449,10 +457,8 @@ export function DataTable({
   }, [columnInfoMap])
   const [editingCell, setEditingCell] = useState<{
     rowId: SqliteDemoId
-    rowKey: string
-    columnName: string
-    value: string
-  } | null>(null)
+  } & EditCellModalState | null>(null)
+  const [openingCellKey, setOpeningCellKey] = useState<string | null>(null)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [resizing, setResizing] = useState<{ columnName: string; startX: number; startWidth: number } | null>(null)
   const [columnOrder, setColumnOrder] = useState<string[]>([])
@@ -471,6 +477,7 @@ export function DataTable({
   const [activeTab, setActiveTab] = useState<'filters' | 'history'>('filters')
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [flashingCellKeys, setFlashingCellKeys] = useState<Record<string, true>>({})
 
   // Value viewer modal state
   const [viewerModal, setViewerModal] = useState<{ columnName: string; value: string } | null>(null)
@@ -486,6 +493,56 @@ export function DataTable({
     (row: SqliteDemoRow) =>
       serializeSqliteDemoKey(tableName as TableName, getRowId(row)),
     [getRowId, tableName],
+  )
+  const previousRowsRef = useRef<Map<string, SqliteDemoRow>>(new Map())
+  const flashTimeoutsRef = useRef<Map<string, number>>(new Map())
+  const pendingRemoteInvalidationRef = useRef<number | null>(null)
+  const pendingRemoteInvalidationDeadlineRef = useRef<number>(0)
+
+  const clearFlashTimeouts = useCallback(() => {
+    for (const timeoutId of flashTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId)
+    }
+    flashTimeoutsRef.current.clear()
+  }, [])
+
+  const scheduleCellFlash = useCallback(
+    (cellKeys: string[]) => {
+      if (cellKeys.length === 0) {
+        return
+      }
+
+      setFlashingCellKeys((currentKeys) => {
+        const nextKeys = { ...currentKeys }
+        for (const cellKey of cellKeys) {
+          nextKeys[cellKey] = true
+        }
+        return nextKeys
+      })
+
+      for (const cellKey of cellKeys) {
+        const existingTimeout = flashTimeoutsRef.current.get(cellKey)
+        if (existingTimeout !== undefined) {
+          window.clearTimeout(existingTimeout)
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          flashTimeoutsRef.current.delete(cellKey)
+          setFlashingCellKeys((currentKeys) => {
+            if (!(cellKey in currentKeys)) {
+              return currentKeys
+            }
+
+            const nextKeys = { ...currentKeys }
+            delete nextKeys[cellKey]
+            return nextKeys
+          })
+        }, CELL_FLASH_MS)
+
+        flashTimeoutsRef.current.set(cellKey, timeoutId)
+      }
+    },
+    [],
   )
 
   // Selection helpers
@@ -533,6 +590,85 @@ export function DataTable({
     const newColumns = defaultColumnNames.filter((name) => !validOrder.includes(name))
     return [...validOrder, ...newColumns]
   }, [columnOrder, defaultColumnNames])
+
+  useEffect(() => {
+    if (remoteInvalidationAt === null) {
+      return
+    }
+
+    pendingRemoteInvalidationRef.current = remoteInvalidationAt
+    pendingRemoteInvalidationDeadlineRef.current =
+      Date.now() + REMOTE_UPDATE_PENDING_WINDOW_MS
+  }, [remoteInvalidationAt])
+
+  useEffect(() => {
+    const previousRows = previousRowsRef.current
+    const nextRows = new Map(
+      displayRows.map((row) => [getSerializedRowId(row), row] as const),
+    )
+    const hasPendingRemoteInvalidation =
+      pendingRemoteInvalidationRef.current !== null &&
+      Date.now() <= pendingRemoteInvalidationDeadlineRef.current
+
+    if (
+      pendingRemoteInvalidationRef.current !== null &&
+      !hasPendingRemoteInvalidation
+    ) {
+      pendingRemoteInvalidationRef.current = null
+      pendingRemoteInvalidationDeadlineRef.current = 0
+    }
+
+    if (hasPendingRemoteInvalidation && previousRows.size > 0) {
+      const changedCellKeys: string[] = []
+
+      for (const row of displayRows) {
+        const rowKey = getSerializedRowId(row)
+        const previousRow = previousRows.get(rowKey)
+
+        if (!previousRow) {
+          for (const columnName of columnNames) {
+            changedCellKeys.push(`${rowKey}:${columnName}`)
+          }
+          continue
+        }
+
+        for (const columnName of columnNames) {
+          const previousValue = formatCellValue(
+            getRowValue(previousRow, columnName),
+          )
+          const nextValue = formatCellValue(getRowValue(row, columnName))
+
+          if (previousValue !== nextValue) {
+            changedCellKeys.push(`${rowKey}:${columnName}`)
+          }
+        }
+      }
+
+      if (changedCellKeys.length > 0) {
+        scheduleCellFlash(changedCellKeys)
+        pendingRemoteInvalidationRef.current = null
+        pendingRemoteInvalidationDeadlineRef.current = 0
+      }
+    }
+
+    previousRowsRef.current = nextRows
+  }, [columnNames, displayRows, getSerializedRowId, scheduleCellFlash])
+
+  useEffect(() => {
+    clearFlashTimeouts()
+    setFlashingCellKeys({})
+    previousRowsRef.current = new Map(
+      displayRows.map((row) => [getSerializedRowId(row), row] as const),
+    )
+    pendingRemoteInvalidationRef.current = null
+    pendingRemoteInvalidationDeadlineRef.current = 0
+  }, [clearFlashTimeouts, tableName])
+
+  useEffect(() => {
+    return () => {
+      clearFlashTimeouts()
+    }
+  }, [clearFlashTimeouts])
 
   // Get indexes for current table
   const tableIndexes = useMemo(() => {
@@ -773,6 +909,63 @@ export function DataTable({
     [onCellEdit],
   )
 
+  const cancelCellEdit = useCallback(
+    async (rowId: SqliteDemoId, rowKey: string, columnName: string) => {
+      await onCellEditCancel(rowId, columnName)
+
+      setEditingCell((currentCell) => {
+        if (
+          currentCell?.rowKey === rowKey &&
+          currentCell.columnName === columnName
+        ) {
+          return null
+        }
+
+        return currentCell
+      })
+    },
+    [onCellEditCancel],
+  )
+
+  const startCellEdit = useCallback(
+    async (
+      rowId: SqliteDemoId,
+      rowKey: string,
+      columnName: string,
+      value: string,
+      isLocked: boolean,
+    ) => {
+      if (isLocked) {
+        return
+      }
+
+      const nextCellKey = `${rowKey}:${columnName}`
+      setOpeningCellKey(nextCellKey)
+
+      try {
+        const opened = await onCellEditStart(rowId, columnName)
+
+        if (!opened) {
+          return
+        }
+
+        setEditingCell({
+          rowId,
+          tableName,
+          rowKey,
+          columnName,
+          columnType: columnInfoMap[columnName]?.type ?? '',
+          value,
+        })
+      } finally {
+        setOpeningCellKey((currentKey) =>
+          currentKey === nextCellKey ? null : currentKey,
+        )
+      }
+    },
+    [columnInfoMap, onCellEditStart, tableName],
+  )
+
   const handleRun = useCallback(async () => {
     if (!collections || !selectedIndex) return
 
@@ -919,7 +1112,7 @@ export function DataTable({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Table Header */}
-      <div className="flex items-center justify-between border-b bg-background px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border/80 bg-card/80 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/70">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">{tableName}</h1>
           <span className="whitespace-nowrap text-sm text-muted-foreground">
@@ -999,33 +1192,34 @@ export function DataTable({
 
       {/* Filter Panel */}
       {filterOpen && (
-        <div className="border-b bg-muted/30">
-          {/* Tabs */}
-          <div className="flex items-center gap-1 border-b px-4">
-            <button
-              type="button"
+        <div className="border-b bg-card/70 backdrop-blur-sm">
+          <div className="flex items-center gap-2 border-b px-4 py-2">
+            <Button
+              variant={activeTab === 'filters' ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setActiveTab('filters')}
               className={cn(
-                'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                'rounded-lg',
                 activeTab === 'filters'
-                  ? 'border-primary text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'text-muted-foreground',
               )}
             >
               Filters
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant={activeTab === 'history' ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={() => setActiveTab('history')}
               className={cn(
-                'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                'rounded-lg',
                 activeTab === 'history'
-                  ? 'border-primary text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'text-muted-foreground',
               )}
             >
               History {history.length > 0 && `(${history.length})`}
-            </button>
+            </Button>
           </div>
 
           {activeTab === 'filters' && (
@@ -1307,12 +1501,15 @@ export function DataTable({
             <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur-sm">
               <TableRow>
                 {/* Checkbox column */}
-                <TableHead className="w-10 px-3">
-                  <Checkbox
-                    checked={isAllSelected ? true : isSomeSelected ? 'indeterminate' : false}
-                    onCheckedChange={toggleAllSelection}
-                    aria-label="Select all"
-                  />
+                <TableHead className="sticky left-0 top-0 z-30 w-16 min-w-16 border-r border-border/80 bg-card/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-card/90">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="inline-block w-4" aria-hidden="true" />
+                    <Checkbox
+                      checked={isAllSelected ? true : isSomeSelected ? 'indeterminate' : false}
+                      onCheckedChange={toggleAllSelection}
+                      aria-label="Select all"
+                    />
+                  </div>
                 </TableHead>
                 {columnNames.map((columnName) => (
                   <TableHead
@@ -1362,101 +1559,89 @@ export function DataTable({
                 const rowId = getRowId(row)
                 const rowKey = getSerializedRowId(row)
                 const isRowSelected = selectedRowKeys.has(rowKey)
+                const rowLockInfo = lockedRowsByKey[rowKey]
 
-                return (
+                const rowContent = (
                   <TableRow
                     key={`${tableName}-${rowKey}`}
                     className={cn(
                       'group',
-                      isRowSelected && 'bg-accent',
+                      isRowSelected && 'bg-primary/[0.08] dark:bg-primary/[0.12]',
+                      rowLockInfo && 'bg-amber-50/40 dark:bg-amber-950/20',
                     )}
                   >
                     {/* Checkbox cell */}
-                    <TableCell className="w-10 px-3">
-                      <Checkbox
-                        checked={isRowSelected}
-                        onCheckedChange={() => toggleRowSelection(rowKey)}
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={`Select row ${rowKey}`}
-                      />
-                    </TableCell>
-                    {columnNames.map((columnName) => (
-                      <TableCell
-                        key={`${tableName}-${rowKey}-${columnName}`}
-                        className="font-mono text-xs"
-                        style={{
-                          width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
-                          minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
-                          maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
-                        }}
-                      >
-                        {editingCell?.rowKey === rowKey &&
-                        editingCell.columnName === columnName ? (
-                          isMultilineColumn(columnName) ||
-                          isStructuredColumnType(columnInfoMap[columnName]?.type ?? '') ? (
-                            <Textarea
-                              autoFocus
-                              value={editingCell.value}
-                              onChange={(event) =>
-                                setEditingCell({
-                                  rowId,
-                                  rowKey,
-                                  columnName,
-                                  value: event.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                commitCellEdit(rowId, columnName, editingCell.value)
-                              }
-                              className="min-h-24"
-                            />
-                          ) : (
-                            <Input
-                              autoFocus
-                              value={editingCell.value}
-                              onChange={(event) =>
-                                setEditingCell({
-                                  rowId,
-                                  rowKey,
-                                  columnName,
-                                  value: event.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                commitCellEdit(rowId, columnName, editingCell.value)
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  commitCellEdit(rowId, columnName, editingCell.value)
-                                }
-
-                                if (event.key === 'Escape') {
-                                  setEditingCell(null)
-                                }
-                              }}
-                              className="h-7 text-xs"
-                            />
-                          )
+                    <TableCell
+                      className={cn(
+                        'sticky left-0 z-20 w-16 min-w-16 border-r border-border/80 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/90',
+                        isRowSelected && 'bg-primary/[0.08] dark:bg-primary/[0.12]',
+                        rowLockInfo
+                          ? 'bg-amber-50/90 dark:bg-amber-950/60'
+                          : 'bg-background/95',
+                      )}
+                    >
+                      <div className="flex items-center justify-center gap-2">
+                        {rowLockInfo ? (
+                          <span
+                            className="text-amber-600"
+                            aria-label={`Locked row ${rowKey}`}
+                          >
+                            🔒
+                          </span>
                         ) : (
+                          <span className="inline-block w-4" aria-hidden="true" />
+                        )}
+                        <Checkbox
+                          checked={isRowSelected}
+                          onCheckedChange={() => toggleRowSelection(rowKey)}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={`Select row ${rowKey}`}
+                        />
+                      </div>
+                    </TableCell>
+                    {columnNames.map((columnName) => {
+                      const cellKey = `${rowKey}:${columnName}`
+                      const isOpeningCell = openingCellKey === cellKey
+
+                      return (
+                        <TableCell
+                          key={`${tableName}-${rowKey}-${columnName}`}
+                          className={cn(
+                            'font-mono text-xs transition-colors duration-700',
+                            flashingCellKeys[cellKey] &&
+                              'bg-emerald-500/15 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.35)] dark:bg-emerald-400/15',
+                          )}
+                          style={{
+                            width: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                            minWidth: columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH,
+                            maxWidth: columnName === columnNames[columnNames.length - 1] ? undefined : (columnWidths[columnName] ?? DEFAULT_COLUMN_WIDTH),
+                          }}
+                        >
                           <div className="group/cell flex items-center justify-between gap-1">
                             <span className={cn(
                               'truncate',
+                              isOpeningCell && 'text-primary',
                               readOnlyColumns.has(columnName) && 'text-muted-foreground',
                             )}>
-                              {formatCellValue(getRowValue(row, columnName))}
+                              {isOpeningCell
+                                ? 'locking...'
+                                : formatCellValue(getRowValue(row, columnName))}
                             </span>
                             <CellActionMenu
                               value={formatCellValue(getRowValue(row, columnName))}
                               columnName={columnName}
                               isReadOnly={readOnlyColumns.has(columnName)}
+                              isEditLocked={Boolean(rowLockInfo)}
+                              editLockedReason={rowLockInfo?.title}
                               canFilter={allIndexFields.has(columnName)}
                               onEdit={() =>
-                                setEditingCell({
+                                void startCellEdit(
                                   rowId,
                                   rowKey,
                                   columnName,
-                                  value: formatCellValue(getRowValue(row, columnName)),
-                                })
+                                  formatCellValue(getRowValue(row, columnName)),
+                                  Boolean(rowLockInfo),
+                                )
                               }
                               onView={() =>
                                 setViewerModal({
@@ -1469,16 +1654,73 @@ export function DataTable({
                               }
                             />
                           </div>
-                        )}
-                      </TableCell>
-                    ))}
+                        </TableCell>
+                      )
+                    })}
                   </TableRow>
                 )
+
+                if (rowLockInfo) {
+                  return (
+                    <TooltipProvider key={`${tableName}-${rowKey}`} delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          {rowContent}
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs">
+                          <p>Locked by another client.</p>
+                          <p className="mt-1 whitespace-pre-line text-muted-foreground">
+                            {rowLockInfo.title}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )
+                }
+
+                return rowContent
               })}
             </TableBody>
           </Table>
         )}
       </div>
+
+      <EditCellModal
+        modal={editingCell}
+        referenceColumn={
+          editingCell
+            ? referenceColumns[editingCell.columnName] ?? null
+            : null
+        }
+        onClose={() =>
+          editingCell
+            ? cancelCellEdit(
+                editingCell.rowId,
+                editingCell.rowKey,
+                editingCell.columnName,
+              )
+            : undefined
+        }
+        onSubmit={() =>
+          editingCell
+            ? commitCellEdit(
+                editingCell.rowId,
+                editingCell.columnName,
+                editingCell.value,
+              )
+            : Promise.resolve()
+        }
+        onValueChange={(value) =>
+          setEditingCell((currentCell) =>
+            currentCell === null
+              ? null
+              : {
+                  ...currentCell,
+                  value,
+                },
+          )
+        }
+      />
 
       {/* Value Viewer Modal */}
       <ValueViewerModal

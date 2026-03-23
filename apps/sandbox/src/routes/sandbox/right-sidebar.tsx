@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { SqliteIndexSnapshot, SqliteReferenceColumn, SqliteTableSnapshot } from '@sink/lib'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { KEY_COLUMNS, type TableName } from '@/data/generated/schema.gen'
 import { CodeBlock } from '@/components/ui/code-block'
 import { getSchemaSource } from '@/lib/schema-sources'
@@ -80,29 +83,28 @@ export function RightSidebar({
     <aside
       ref={sidebarRef}
       style={{ width }}
-      className="relative flex shrink-0 flex-col border-l bg-background"
+      className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar text-sidebar-foreground"
     >
-      {/* Resize Handle */}
       <div
         onMouseDown={handleMouseDown}
         className={cn(
           'absolute left-0 top-0 bottom-0 w-1 cursor-col-resize transition-colors',
-          'hover:bg-primary/20',
-          isResizing && 'bg-primary/30',
+          'hover:bg-sidebar-primary/20',
+          isResizing && 'bg-sidebar-primary/35',
         )}
       />
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <h2 className="text-sm font-medium">
+      <div className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
+        <h2 className="font-heading text-sm font-semibold tracking-tight">
           {activeTab === 'document' ? 'Document Preview' : activeTab === 'schema' ? 'Schema' : 'Indexes'}{' '}
           {activeTab !== 'document' && (
             <>for table <span className="font-semibold">{tableName}</span></>
           )}
         </h2>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onClose}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="size-8 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           aria-label="Close sidebar"
         >
           <svg
@@ -119,52 +121,53 @@ export function RightSidebar({
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
           </svg>
-        </button>
+        </Button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b">
+      <div className="flex gap-2 border-b border-sidebar-border px-3 py-2">
         {hasSelectedRows && (
-          <button
-            type="button"
+          <Button
+            variant={activeTab === 'document' ? 'secondary' : 'ghost'}
+            size="sm"
             onClick={() => setActiveTab('document')}
             className={cn(
-              'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
+              'flex-1 rounded-lg',
               activeTab === 'document'
-                ? 'border-b-2 border-primary text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
+                ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90'
+                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
             )}
           >
             {selectedRows.length === 1 ? 'Document' : `Documents (${selectedRows.length})`}
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
+        <Button
+          variant={activeTab === 'schema' ? 'secondary' : 'ghost'}
+          size="sm"
           onClick={() => setActiveTab('schema')}
           className={cn(
-            'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
+            'flex-1 rounded-lg',
             activeTab === 'schema'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground',
+              ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90'
+              : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
           )}
         >
           Schema
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant={activeTab === 'indexes' ? 'secondary' : 'ghost'}
+          size="sm"
           onClick={() => setActiveTab('indexes')}
           className={cn(
-            'flex-1 whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors',
+            'flex-1 rounded-lg',
             activeTab === 'indexes'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground',
+              ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90'
+              : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
           )}
         >
           Indexes
-        </button>
+        </Button>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-auto p-4">
         {activeTab === 'document' && hasSelectedRows && columns && referenceColumns ? (
           <DocumentPreviewPanel
@@ -185,16 +188,21 @@ export function RightSidebar({
 
 function SchemaPanel({ schemaSource, tableName }: { schemaSource: string; tableName: string }) {
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Generated schema for <code className="rounded bg-muted px-1">{tableName}</code>
-      </p>
-      <CodeBlock
-        code={schemaSource.trim()}
-        language="typescript"
-        formatLanguage="typescript"
-      />
-    </div>
+    <Card className="border-sidebar-border bg-card/70">
+      <CardHeader className="space-y-3 p-4">
+        <Badge variant="outline" className="w-fit font-mono text-[11px]">
+          {tableName}
+        </Badge>
+        <CardTitle className="font-heading text-base">Generated schema</CardTitle>
+      </CardHeader>
+      <CardContent className="p-4 pt-0">
+        <CodeBlock
+          code={schemaSource.trim()}
+          language="typescript"
+          formatLanguage="typescript"
+        />
+      </CardContent>
+    </Card>
   )
 }
 
@@ -212,12 +220,13 @@ function CopyButton({ text }: { text: string }) {
   }, [text])
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon"
       onClick={handleCopy}
       className={cn(
-        'ml-2 rounded p-1 text-muted-foreground',
-        'hover:bg-muted hover:text-foreground',
+        'ml-2 size-7 text-muted-foreground',
+        'hover:bg-accent hover:text-accent-foreground',
         copied && 'text-green-600 dark:text-green-400',
       )}
       aria-label="Copy index name"
@@ -232,7 +241,7 @@ function CopyButton({ text }: { text: string }) {
           <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
         </svg>
       )}
-    </button>
+    </Button>
   )
 }
 
@@ -259,9 +268,9 @@ function IndexesPanel({
 
   return (
     <div className="space-y-4">
-      {/* Database Indexes */}
-      <div>
-        <div className="mb-2 flex items-center gap-2">
+      <Card className="border-sidebar-border bg-card/70">
+        <CardHeader className="p-4">
+          <CardTitle className="flex items-center gap-2 font-heading text-base">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="14"
@@ -279,12 +288,14 @@ function IndexesPanel({
             <path d="M3 15h18" />
             <path d="M3 21h18" />
           </svg>
-          <span className="text-sm font-medium">Indexes</span>
-        </div>
+            Indexes
+          </CardTitle>
+        </CardHeader>
 
-        <div className="space-y-3">
+        <CardContent className="space-y-3 p-4 pt-0">
           {allIndexes.map((index) => (
-            <div key={index.name} className="group rounded-md border bg-card p-3">
+            <Card key={index.name} className="group rounded-2xl border-border/70 bg-background/70 shadow-none">
+              <CardContent className="p-3">
               <div className="mb-1 flex items-start justify-between gap-1">
                 <span className="break-all font-mono text-sm">{index.name}</span>
                 <CopyButton text={index.name} />
@@ -305,10 +316,11 @@ function IndexesPanel({
                   </span>
                 )}
               </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

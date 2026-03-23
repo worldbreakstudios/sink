@@ -1,26 +1,88 @@
-import { ServerSqliteDatabase } from '@sink/lib/server'
-import { createGeneratedSyncServer } from './src/data/generated/schema.server.gen.ts'
+import {
+  ServerSqliteDatabase,
+  SYNC_SERVER_TRANSACTIONS_TABLE,
+  type SyncInvalidationTarget,
+  parseSyncPayload,
+  type SyncLockTarget,
+} from '@sink/lib/server'
+import { createAllTables } from './src/data/generated/schema.gen.ts'
+import { createGeneratedSyncServerRuntime } from './src/data/generated/operations.gen.ts'
+import { ensureSandboxSeedData, resetSandboxSeedData } from './src/lib/server-seed.ts'
 
 const port = Number.parseInt(process.env.PORT ?? '3001', 10)
 const hostname = process.env.HOST ?? '127.0.0.1'
-const websocketPath = process.env.SINK_SYNC_PATH ?? '/ws/sync'
+const websocketPath = process.env.SINK_TX_PATH ?? '/ws/transactions'
+const resetPath = process.env.SINK_RESET_PATH ?? '/api/reset-demo'
+const locksPath = process.env.SINK_LOCKS_PATH ?? '/api/locks-demo'
 const databasePath =
   process.env.SINK_SERVER_DB_PATH ??
   new URL('./sandbox-sync.db', import.meta.url).pathname
 
 const database = new ServerSqliteDatabase(databasePath)
-const server = await createGeneratedSyncServer({
+await createAllTables(database)
+await ensureSandboxSeedData(database)
+
+const server = await createGeneratedSyncServerRuntime({
   database,
   port,
   hostname,
-  path: websocketPath,
+  websocketPath,
+  async handleHttpRequest(request, response) {
+    if (request.method === 'GET' && request.url === locksPath) {
+      const rows = await database.query<{
+        transactionId: string
+        clientId: string
+        mutationName: string
+        lockTargetsJson: string
+        expiresAt: number
+        updatedAt: number
+      }>(
+        `SELECT "transactionId", "clientId", "mutationName", "lockTargetsJson", "expiresAt", "updatedAt"
+         FROM "${SYNC_SERVER_TRANSACTIONS_TABLE}"
+         WHERE "status" = 'opened' AND "expiresAt" > ?
+         ORDER BY "updatedAt" DESC;`,
+        [Date.now()],
+      )
+
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'application/json')
+      response.end(
+        JSON.stringify({
+          locks: rows.map((row) => ({
+            transactionId: row.transactionId,
+            clientId: row.clientId,
+            mutationName: row.mutationName,
+            expiresAt: row.expiresAt,
+            updatedAt: row.updatedAt,
+            lockTargets: parseSyncPayload<SyncLockTarget[]>(row.lockTargetsJson),
+          })),
+        }),
+      )
+      return true
+    }
+
+    if (request.method !== 'POST' || request.url !== resetPath) {
+      return false
+    }
+
+    await resetSandboxSeedData(database)
+    response.statusCode = 200
+    response.setHeader('Content-Type', 'application/json')
+    response.end(
+      JSON.stringify({
+        ok: true,
+        invalidations: DEMO_RESET_INVALIDATIONS,
+      }),
+    )
+    return true
+  },
   onError(error) {
-    console.error('[sink-sync-server]', error)
+    console.error('[sandbox-sync-server]', error)
   },
 })
 
 console.log(
-  `Sink sync server listening at ws://${hostname}:${port}${websocketPath} using ${databasePath}`,
+  `Sandbox sync server listening at http://${hostname}:${port} and ws://${hostname}:${port}${websocketPath} using ${databasePath}`,
 )
 
 async function shutdown(exitCode = 0): Promise<void> {
@@ -36,3 +98,18 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void shutdown(0)
 })
+
+const DEMO_RESET_INVALIDATIONS: SyncInvalidationTarget[] = [
+  {
+    tableName: 'objectTypes',
+    keys: [],
+  },
+  {
+    tableName: 'objects',
+    keys: [],
+  },
+  {
+    tableName: 'fields',
+    keys: [],
+  },
+]

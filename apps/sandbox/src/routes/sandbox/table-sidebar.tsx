@@ -1,4 +1,5 @@
 import type { SqliteTableSnapshot } from '@sink/lib'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 function TableIcon({ className }: { className?: string }) {
@@ -28,75 +29,99 @@ export function TableSidebar({
   selectedTableName,
   onSelectTable,
   onCreateTable,
+  onClose,
 }: {
   tables: SqliteTableSnapshot[]
   selectedTableName: string
   onSelectTable: (tableName: string) => void
-  onCreateTable: () => void
+  onCreateTable?: () => void
+  onClose?: () => void
 }) {
   return (
-    <aside className="flex w-52 flex-col border-r bg-muted/30">
-      {/* Header */}
-      <div className="border-b px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <aside className="flex w-56 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+      <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-3">
+        <h2 className="font-heading text-xs font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/70">
           Tables
         </h2>
+        {onClose ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="size-7 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            aria-label="Collapse tables sidebar"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </Button>
+        ) : null}
       </div>
 
-      {/* Table List */}
-      <nav className="flex-1 overflow-auto p-2">
-        <ul className="space-y-0.5">
+      <nav className="flex-1 overflow-auto p-2.5">
+        <ul className="space-y-1">
           {tables.map((table) => (
             <li key={table.name}>
-              <button
-                type="button"
+              <Button
+                variant={table.name === selectedTableName ? 'secondary' : 'ghost'}
                 onClick={() => onSelectTable(table.name)}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                  'h-auto w-full justify-start gap-2.5 rounded-xl px-3 py-2 text-left text-sm shadow-none',
                   table.name === selectedTableName
-                    ? 'bg-primary/10 font-medium text-primary'
-                    : 'text-foreground hover:bg-muted',
+                    ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90'
+                    : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
                 )}
               >
                 <TableIcon
                   className={cn(
                     'shrink-0',
                     table.name === selectedTableName
-                      ? 'text-primary'
-                      : 'text-muted-foreground',
+                      ? 'text-sidebar-primary-foreground'
+                      : 'text-sidebar-foreground/55',
                   )}
                 />
                 <span className="truncate">{table.name}</span>
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       </nav>
 
-      {/* Footer */}
-      <div className="border-t p-2">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onCreateTable}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+      {onCreateTable ? (
+        <div className="border-t border-sidebar-border p-2.5">
+          <Button
+            variant="outline"
+            className="w-full justify-start border-sidebar-border bg-sidebar text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            onClick={onCreateTable}
           >
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-          </svg>
-          <span>Create Table</span>
-        </button>
-      </div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M5 12h14" />
+              <path d="M12 5v14" />
+            </svg>
+            <span>Create Table</span>
+          </Button>
+        </div>
+      ) : null}
     </aside>
   )
 }

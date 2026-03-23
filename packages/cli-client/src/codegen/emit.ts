@@ -21,9 +21,9 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push("import type { TransactionConfig } from '@tanstack/db'")
   lines.push("import { createTransaction } from '@tanstack/db'")
   lines.push(
-    "import type { AsyncSqliteDatabase, ColumnValidatorDescriptor, CreateSqliteWebSocketSyncClientOptions, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn, SqliteSyncSchema, SqliteSyncTableMetadata } from '@sink/lib'",
+    "import type { AsyncSqliteDatabase, ColumnValidatorDescriptor, SqliteCollection, SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'",
   )
-  lines.push("import { createSqliteCollection, createSqliteWebSocketSyncClient } from '@sink/lib'")
+  lines.push("import { createSqliteCollection } from '@sink/lib'")
   lines.push('')
   lines.push(`export const SCHEMA_HASH = '${schemaHash}'`)
   lines.push('')
@@ -268,22 +268,6 @@ export function emit(definitions: TableDefinition[]): string {
   lines.push('} as const satisfies IndexesByTable')
   lines.push('')
 
-  lines.push('export type TableSyncMetaByTable = Record<TableName, SqliteSyncTableMetadata>')
-  lines.push('')
-  lines.push('export const TABLE_SYNC_META = {')
-  for (const def of definitions) {
-    lines.push(
-      `  ${JSON.stringify(def.tableName)}: { keyColumns: KEY_COLUMNS.${def.tableName}, hasUpdatedAt: ${def.options.withUpdatedAt === true}, hasActorId: ${tableHasActorId(def.options)}, referenceColumns: REFERENCE_COLUMNS.${def.tableName}, indexes: INDEXES.${def.tableName} },`,
-    )
-  }
-  lines.push('} as const satisfies TableSyncMetaByTable')
-  lines.push('')
-  lines.push('export const SYNC_SCHEMA = {')
-  lines.push('  schemaHash: SCHEMA_HASH,')
-  lines.push('  tables: TABLE_SYNC_META,')
-  lines.push('} as const satisfies SqliteSyncSchema')
-  lines.push('')
-
   lines.push(
     'export type SchemaValidatorDescriptorsByTable = Record<TableName, Record<string, ColumnValidatorDescriptor>>',
   )
@@ -372,18 +356,6 @@ export function emit(definitions: TableDefinition[]): string {
     lines.push('    }),')
   }
   lines.push('  }')
-  lines.push('}')
-  lines.push('')
-
-  lines.push('export function createSyncClient(')
-  lines.push('  db: AsyncSqliteDatabase,')
-  lines.push("  options: Omit<CreateSqliteWebSocketSyncClientOptions, 'database' | 'schema'>,")
-  lines.push(') {')
-  lines.push('  return createSqliteWebSocketSyncClient({')
-  lines.push('    ...options,')
-  lines.push('    database: db,')
-  lines.push('    schema: SYNC_SCHEMA,')
-  lines.push('  })')
   lines.push('}')
   lines.push('')
 

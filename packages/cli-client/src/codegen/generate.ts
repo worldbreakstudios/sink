@@ -1,22 +1,26 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { discoverSchemaFiles, resolveOutputPath, resolveServerOutputPath } from './discover'
+import {
+  discoverMutationFiles,
+  discoverPolicyFiles,
+  discoverQueryFiles,
+  discoverSchemaFiles,
+  resolveOperationsOutputPath,
+  resolveOutputPath,
+} from './discover'
 import { loadSchemaFiles } from './load-schema'
 import { emit } from './emit'
-import { emitServer } from './emit-server'
+import { emitOperations } from './emit-operations'
 
 export interface GenerateOptions {
   cwd: string
   out?: string
-  serverOut?: string
 }
 
 export async function generate(options: GenerateOptions): Promise<void> {
   const srcDir = path.resolve(options.cwd, 'src')
   const outputPath = resolveOutputPath(options.cwd, options.out)
-  const serverOutputPath = options.serverOut
-    ? resolveServerOutputPath(options.cwd, options.serverOut)
-    : null
+  const operationsOutputPath = resolveOperationsOutputPath(options.cwd, options.out)
 
   const files = await discoverSchemaFiles(srcDir)
   if (files.length === 0) {
@@ -26,39 +30,30 @@ export async function generate(options: GenerateOptions): Promise<void> {
 
   const definitions = await loadSchemaFiles(files)
   const code = emit(definitions)
+  const policyFiles = await discoverPolicyFiles(srcDir)
+  const queryFiles = await discoverQueryFiles(srcDir)
+  const mutationFiles = await discoverMutationFiles(srcDir)
+  const operationsCode = emitOperations({
+    definitions,
+    operationsOutputPath,
+    schemaOutputPath: outputPath,
+    policyFiles,
+    queryFiles,
+    mutationFiles,
+  })
 
   const outputDir = path.dirname(outputPath)
   fs.mkdirSync(outputDir, { recursive: true })
   fs.writeFileSync(outputPath, code, 'utf-8')
+  fs.writeFileSync(operationsOutputPath, operationsCode, 'utf-8')
 
   const gitignorePath = path.join(outputDir, '.gitignore')
   if (!fs.existsSync(gitignorePath)) {
     fs.writeFileSync(gitignorePath, '*\n', 'utf-8')
   }
 
-  const outputs = [path.relative(options.cwd, outputPath)]
-
-  if (serverOutputPath) {
-    const relativeImportPath = toImportPath(
-      path.relative(path.dirname(serverOutputPath), outputPath),
-      { preserveTsExtension: true },
-    )
-    const serverCode = emitServer(relativeImportPath)
-    const serverOutputDir = path.dirname(serverOutputPath)
-
-    fs.mkdirSync(serverOutputDir, { recursive: true })
-    fs.writeFileSync(serverOutputPath, serverCode, 'utf-8')
-
-    const serverGitignorePath = path.join(serverOutputDir, '.gitignore')
-    if (!fs.existsSync(serverGitignorePath)) {
-      fs.writeFileSync(serverGitignorePath, '*\n', 'utf-8')
-    }
-
-    outputs.push(path.relative(options.cwd, serverOutputPath))
-  }
-
   console.log(
-    `Generated schema for ${definitions.length} table${definitions.length === 1 ? '' : 's'} -> ${outputs.join(', ')}`,
+    `Generated schema and operations for ${definitions.length} table${definitions.length === 1 ? '' : 's'} -> ${path.relative(options.cwd, outputPath)}, ${path.relative(options.cwd, operationsOutputPath)}`,
   )
 }
 
@@ -81,29 +76,21 @@ export async function watch(options: GenerateOptions): Promise<void> {
   }
 
   const watcher = fs.watch(srcDir, { recursive: true }, (_event, filename) => {
-    if (filename && filename.endsWith('.schema.ts')) {
+    if (
+      filename &&
+      (filename.endsWith('.schema.ts') ||
+        filename.endsWith('.policy.ts') ||
+        filename.endsWith('.queries.ts') ||
+        filename.endsWith('.mutations.ts'))
+    ) {
       rebuild()
     }
   })
 
-  console.log('Watching for *.schema.ts changes...')
+  console.log('Watching for schema/policy/query/mutation changes...')
 
   process.on('SIGINT', () => {
     watcher.close()
     process.exit(0)
   })
-}
-
-function toImportPath(
-  relativePath: string,
-  options: { preserveTsExtension?: boolean } = {},
-): string {
-  const normalizedPath = relativePath
-    .replace(
-      options.preserveTsExtension ? /\.(cts|mts|js|jsx)$/ : /\.(cts|mts|ts|tsx|js|jsx)$/,
-      '',
-    )
-    .split(path.sep)
-    .join('/')
-  return normalizedPath.startsWith('.') ? normalizedPath : `./${normalizedPath}`
 }

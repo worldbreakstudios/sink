@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +19,8 @@ interface CellActionMenuProps {
   value: string
   columnName: string
   isReadOnly: boolean
+  isEditLocked?: boolean
+  editLockedReason?: string
   canFilter: boolean
   onEdit: () => void
   onView: () => void
@@ -33,6 +36,8 @@ export function CellActionMenu({
   value,
   columnName,
   isReadOnly,
+  isEditLocked = false,
+  editLockedReason,
   canFilter,
   onEdit,
   onView,
@@ -53,11 +58,12 @@ export function CellActionMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon"
           className={cn(
-            'shrink-0 rounded p-0.5 opacity-0 group-hover/cell:opacity-100 focus:opacity-100',
-            'text-muted-foreground hover:text-foreground hover:bg-muted',
+            'size-7 shrink-0 opacity-0 group-hover/cell:opacity-100 focus:opacity-100',
+            'text-muted-foreground hover:text-foreground',
           )}
           onClick={(e) => e.stopPropagation()}
         >
@@ -76,7 +82,7 @@ export function CellActionMenu({
             <circle cx="12" cy="5" r="1" />
             <circle cx="12" cy="19" r="1" />
           </svg>
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48" onClick={(e) => e.stopPropagation()}>
         <DropdownMenuItem onClick={onView}>
@@ -135,7 +141,11 @@ export function CellActionMenu({
           <DropdownMenuShortcut>Cmd+C</DropdownMenuShortcut>
         </DropdownMenuItem>
         {!isReadOnly && (
-          <DropdownMenuItem onClick={onEdit}>
+          <DropdownMenuItem
+            disabled={isEditLocked}
+            onClick={isEditLocked ? undefined : onEdit}
+            title={isEditLocked ? editLockedReason : undefined}
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="14"
@@ -151,8 +161,10 @@ export function CellActionMenu({
               <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
               <path d="m15 5 4 4" />
             </svg>
-            Edit
-            <DropdownMenuShortcut>Enter</DropdownMenuShortcut>
+            {isEditLocked ? 'Edit locked' : 'Edit'}
+            <DropdownMenuShortcut>
+              {isEditLocked ? '🔒' : 'Enter'}
+            </DropdownMenuShortcut>
           </DropdownMenuItem>
         )}
         {canFilter && (
