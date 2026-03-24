@@ -207,7 +207,16 @@ interface SqliteWorkerConstructorLike {
 }
 
 function getBundledSqliteAssetUrl(path: string): URL {
-  return new URL(`./${path}`, import.meta.url)
+  switch (path) {
+    case 'sqlite3-worker1.mjs':
+      return new URL('./sqlite3-worker1.mjs', import.meta.url)
+    case 'sqlite3.wasm':
+      return new URL('./sqlite3.wasm', import.meta.url)
+    case 'sqlite3-opfs-async-proxy.js':
+      return new URL('./sqlite3-opfs-async-proxy.js', import.meta.url)
+    default:
+      throw new Error(`Unsupported bundled sqlite asset "${path}".`)
+  }
 }
 
 function locateBundledSqliteAsset(path: string): string {
