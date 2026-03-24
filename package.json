@@ -7,11 +7,18 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace @sink/sandbox",
+    "dev:sandbox": "pnpm --filter @sink/sandbox run dev",
+    "dev:server": "pnpm --filter @sink/sandbox run sync:server",
+    "dev:codegen": "pnpm --filter @worldbreakstudios/sink-cli run cli generate --cwd apps/sandbox --watch",
+    "dev:all": "concurrently --kill-others-on-fail --names sandbox,server,codegen --prefix-colors blue,magenta,green \"pnpm run dev:sandbox\" \"pnpm run dev:server\" \"pnpm run dev:codegen\"",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "cli": "npm run cli --workspace @worldbreakstudios/sink-cli --"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
