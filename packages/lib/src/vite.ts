@@ -66,7 +66,11 @@ export function sinkVite(options: SinkViteOptions = {}): SinkVitePlugin {
       config.optimizeDeps ??= {}
       config.optimizeDeps.exclude = appendUnique(
         config.optimizeDeps.exclude,
-        ['@sqlite.org/sqlite-wasm'],
+        [
+          '@sqlite.org/sqlite-wasm',
+          '@worldbreakstudios/sink-lib',
+          '@worldbreakstudios/sink-lib/browser',
+        ],
       )
 
       config.worker ??= {}

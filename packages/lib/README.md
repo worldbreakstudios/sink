@@ -30,7 +30,7 @@ const { database } = await createSharedOpfsDatabase({
 
 - COOP/COEP dev and preview headers
 - `worker.format = 'es'`
-- `optimizeDeps.exclude = ['@sqlite.org/sqlite-wasm']`
+- `optimizeDeps.exclude = ['@sqlite.org/sqlite-wasm', '@worldbreakstudios/sink-lib', '@worldbreakstudios/sink-lib/browser']`
 
 If you want to develop against a local Sink checkout from another app repo, opt in explicitly:
 
