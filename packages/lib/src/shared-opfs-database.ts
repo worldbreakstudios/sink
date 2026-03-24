@@ -229,11 +229,11 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     }
 
     this.#worker = new globals.Worker(
-      new URL('./shared-opfs-dedicated.worker.ts', import.meta.url),
+      new URL('./shared-opfs-dedicated.worker.js', import.meta.url),
       { type: 'module' },
     )
     this.#coordinator = new globals.SharedWorker(
-      new URL('./shared-opfs-coordinator.shared-worker.ts', import.meta.url),
+      new URL('./shared-opfs-coordinator.shared-worker.js', import.meta.url),
       {
         type: 'module',
         name: 'sink-shared-opfs-coordinator',

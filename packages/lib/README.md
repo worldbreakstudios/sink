@@ -2,6 +2,49 @@
 
 Core SQLite utilities for building offline-first apps with TanStack DB.
 
+## Standalone Browser Apps
+
+Browser apps should consume the packaged runtime instead of aliasing into `src`.
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import { sinkVite } from '@worldbreakstudios/sink-lib/vite'
+
+export default defineConfig({
+  plugins: [sinkVite()],
+})
+```
+
+```ts
+// app.ts
+import { createSharedOpfsDatabase } from '@worldbreakstudios/sink-lib/browser'
+
+const { database } = await createSharedOpfsDatabase({
+  filename: 'app.db',
+  fallbackPersistence: 'localStorage',
+})
+```
+
+`sinkVite()` wires in the Vite settings Sink needs for browser sqlite:
+
+- COOP/COEP dev and preview headers
+- `worker.format = 'es'`
+- `optimizeDeps.exclude = ['@sqlite.org/sqlite-wasm']`
+
+If you want to develop against a local Sink checkout from another app repo, opt in explicitly:
+
+```ts
+import { defineConfig } from 'vite'
+import { sinkVite } from '@worldbreakstudios/sink-lib/vite'
+
+export default defineConfig({
+  plugins: [sinkVite({ localSourceRoot: '../sink' })],
+})
+```
+
+That mode adds source aliases and `server.fs.allow` for the provided Sink repo path. Production servers still need to send matching COOP/COEP headers if you use OPFS.
+
 ## Schema Definition API
 
 Define your database tables in `*.schema.ts` files using `defineTable` and the `v` validator builder. These files are consumed by the `sink generate` CLI to produce typed collections, SQL DDL, and CRUD helpers.
