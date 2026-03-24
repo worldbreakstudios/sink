@@ -1,4 +1,4 @@
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('fields', {
   object_id: v.id('objects', { enforceExists: true }),

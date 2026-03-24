@@ -16,7 +16,7 @@ import {
   type SqliteExplorerSnapshot,
   type SqliteIndexSnapshot,
   type SyncClientSnapshot,
-} from '@sink/lib'
+} from '@worldbreakstudios/sink-lib'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -30,7 +30,7 @@ import {
   type SqliteDemoRow,
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
-import type { SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteReferenceColumn } from '@worldbreakstudios/sink-lib'
 import {
   INDEXES,
   KEY_COLUMNS,

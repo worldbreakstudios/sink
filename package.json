@@ -11,7 +11,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "cli": "npm run cli --workspace @sink/cli-client --"
+    "cli": "npm run cli --workspace @worldbreakstudios/sink-cli --"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

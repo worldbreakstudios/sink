@@ -1,4 +1,4 @@
-# @sink/cli-client
+# @worldbreakstudios/sink-cli
 
 CLI tooling for the sink workspace. Provides the `sink` command with schema code generation.
 
@@ -7,7 +7,7 @@ CLI tooling for the sink workspace. Provides the `sink` command with schema code
 The CLI is available as the `sink` bin after building:
 
 ```bash
-pnpm --filter @sink/cli-client run build
+pnpm --filter @worldbreakstudios/sink-cli run build
 ```
 
 ## Commands
@@ -109,7 +109,7 @@ Insert helpers accept `Omit<Row, 'id'>` since the primary key is auto-incremente
 
 ```ts
 // src/data/notes.schema.ts
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('notes', {
   id: v.id(),
@@ -121,4 +121,4 @@ export default defineTable('notes', {
 }, { orderBy: 'id ASC' })
 ```
 
-See the [`@sink/lib` README](../lib/README.md) for the full list of supported validators.
+See the [`@worldbreakstudios/sink-lib` README](../lib/README.md) for the full list of supported validators.

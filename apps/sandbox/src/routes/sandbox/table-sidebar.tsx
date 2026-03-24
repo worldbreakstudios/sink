@@ -1,4 +1,4 @@
-import type { SqliteTableSnapshot } from '@sink/lib'
+import type { SqliteTableSnapshot } from '@worldbreakstudios/sink-lib'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 

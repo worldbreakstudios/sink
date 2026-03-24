@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import type { SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteReferenceColumn } from '@worldbreakstudios/sink-lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'

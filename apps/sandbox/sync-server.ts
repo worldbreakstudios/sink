@@ -4,7 +4,7 @@ import {
   type SyncInvalidationTarget,
   parseSyncPayload,
   type SyncLockTarget,
-} from '@sink/lib/server'
+} from '@worldbreakstudios/sink-lib/server'
 import { createAllTables } from './src/data/generated/schema.gen.ts'
 import { createGeneratedSyncServerRuntime } from './src/data/generated/operations.gen.ts'
 import { ensureSandboxSeedData, resetSandboxSeedData } from './src/lib/server-seed.ts'

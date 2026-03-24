@@ -1,8 +1,10 @@
 {
-  "name": "@sink/lib",
+  "name": "@worldbreakstudios/sink-lib",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "private"
+  },
   "types": "./src/index.ts",
   "exports": {
     ".": {
@@ -21,7 +23,8 @@
   "scripts": {
     "build": "tsup --config tsup.config.ts",
     "lint": "tsc --project tsconfig.json --noEmit",
-    "typecheck": "tsc --project tsconfig.json --noEmit"
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.4.0",

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useLiveQuery } from '@tanstack/react-db'
-import type { SqliteCollection } from '@sink/lib'
+import type { SqliteCollection } from '@worldbreakstudios/sink-lib'
 import type { SqliteDemoId, SqliteDemoRow } from '@/lib/sqlite-demo-collections'
 
 export function CollectionCounter({

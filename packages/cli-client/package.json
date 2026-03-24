@@ -1,5 +1,5 @@
 {
-  "name": "@sink/cli-client",
+  "name": "@worldbreakstudios/sink-cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -23,7 +23,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sink/lib": "workspace:*",
+    "@worldbreakstudios/sink-lib": "workspace:*",
     "glob": "^11.0.0",
     "jiti": "^2.4.2"
   },

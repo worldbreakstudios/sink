@@ -1,9 +1,9 @@
-import type { AsyncSqliteDatabase } from '@sink/lib'
+import type { AsyncSqliteDatabase } from '@worldbreakstudios/sink-lib'
 import {
   SYNC_SERVER_LOCKS_TABLE,
   SYNC_SERVER_TRANSACTIONS_TABLE,
   ensureSyncServerStateTables,
-} from '@sink/lib/server'
+} from '@worldbreakstudios/sink-lib/server'
 import { createAllTables } from '../data/generated/schema.gen.ts'
 export { ensureSandboxSeedData } from './sandbox-seed-data.ts'
 import { ensureSandboxSeedData } from './sandbox-seed-data.ts'

@@ -1,4 +1,4 @@
-# @sink/lib
+# @worldbreakstudios/sink-lib
 
 Core SQLite utilities for building offline-first apps with TanStack DB.
 
@@ -12,7 +12,7 @@ Creates a table definition. Each file should have a single `defineTable` as its 
 
 ```ts
 // notes.schema.ts
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('notes', {
   id: v.id(),
@@ -78,7 +78,7 @@ db.close()
 Creates a TanStack DB collection backed by a SQLite table, enabling reactive queries with `useLiveQuery`.
 
 ```ts
-import { createSqliteCollection } from '@sink/lib'
+import { createSqliteCollection } from '@worldbreakstudios/sink-lib'
 
 const collection = createSqliteCollection<MyRow, number>({
   id: 'my-collection',

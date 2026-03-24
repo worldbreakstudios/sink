@@ -1,4 +1,4 @@
-import type { SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteReferenceColumn } from '@worldbreakstudios/sink-lib'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

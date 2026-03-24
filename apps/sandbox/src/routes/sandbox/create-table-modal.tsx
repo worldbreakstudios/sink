@@ -118,7 +118,7 @@ function generateCode(
   })
 
   // Build the defineTable call
-  let code = `import { defineTable, v } from '@sink/lib'
+  let code = `import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable(
   '${snakeName}',

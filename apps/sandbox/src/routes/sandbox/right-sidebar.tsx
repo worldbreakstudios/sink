@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import type { SqliteIndexSnapshot, SqliteReferenceColumn, SqliteTableSnapshot } from '@sink/lib'
+import type { SqliteIndexSnapshot, SqliteReferenceColumn, SqliteTableSnapshot } from '@worldbreakstudios/sink-lib'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
