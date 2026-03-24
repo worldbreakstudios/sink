@@ -1,8 +1,10 @@
 {
   "name": "@worldbreakstudios/sink-cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "private"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -10,7 +12,7 @@
     }
   },
   "bin": {
-    "sink": "./dist/cli.js"
+    "sink": "dist/cli.js"
   },
   "files": [
     "dist",
