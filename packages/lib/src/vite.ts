@@ -1,52 +1,19 @@
 import path from 'node:path'
+import type { Alias, AliasOptions, Plugin, UserConfig } from 'vite'
 
 const SINK_BROWSER_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
 } as const
 
-type AliasEntry = {
-  find: string
-  replacement: string
-}
-
-type AliasValue = AliasEntry[] | Record<string, string>
-
-interface SinkViteConfig {
-  server?: {
-    headers?: Record<string, string>
-    fs?: {
-      allow?: string[]
-    }
-  }
-  preview?: {
-    headers?: Record<string, string>
-  }
-  optimizeDeps?: {
-    exclude?: string[]
-  }
-  worker?: {
-    format?: string
-  }
-  resolve?: {
-    alias?: AliasValue
-    dedupe?: string[]
-  }
-}
-
 export interface SinkViteOptions {
   localSourceRoot?: string
 }
 
-export interface SinkVitePlugin {
-  name: string
-  config(config: SinkViteConfig): SinkViteConfig
-}
-
-export function sinkVite(options: SinkViteOptions = {}): SinkVitePlugin {
+export function sinkVite(options: SinkViteOptions = {}): Plugin {
   return {
     name: 'sink-vite',
-    config(config) {
+    config(config: UserConfig): UserConfig {
       const localSourceRoot = options.localSourceRoot
         ? path.resolve(options.localSourceRoot)
         : null
@@ -103,13 +70,13 @@ function appendUnique(
 }
 
 function mergeAliases(
-  existing: AliasValue | undefined,
-  next: readonly AliasEntry[],
-): AliasEntry[] {
+  existing: AliasOptions | undefined,
+  next: readonly Alias[],
+): Alias[] {
   return [...next, ...normalizeAliases(existing)]
 }
 
-function normalizeAliases(value: AliasValue | undefined): AliasEntry[] {
+function normalizeAliases(value: AliasOptions | undefined): Alias[] {
   if (!value) {
     return []
   }
@@ -124,7 +91,7 @@ function normalizeAliases(value: AliasValue | undefined): AliasEntry[] {
   }))
 }
 
-function createLocalSourceAliases(localSourceRoot: string): AliasEntry[] {
+function createLocalSourceAliases(localSourceRoot: string): Alias[] {
   return [
     {
       find: '@worldbreakstudios/sink-lib/server',

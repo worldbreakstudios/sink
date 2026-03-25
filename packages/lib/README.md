@@ -6,6 +6,12 @@ Core SQLite utilities for building offline-first apps with TanStack DB.
 
 Browser apps should consume the packaged runtime instead of aliasing into `src`.
 
+Install the browser peers in the app itself so the bundler can resolve their runtime assets directly:
+
+```sh
+pnpm add @worldbreakstudios/sink-lib @sqlite.org/sqlite-wasm @tanstack/db
+```
+
 ```ts
 // vite.config.ts
 import { defineConfig } from 'vite'

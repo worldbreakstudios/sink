@@ -35,6 +35,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.51.2-build6
+        version: 3.51.2-build6
       '@tabler/icons-react':
         specifier: ^3.40.0
         version: 3.40.0(react@19.2.4)
@@ -70,7 +73,7 @@ importers:
         version: 1.167.3(@tanstack/react-router@1.168.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       '@worldbreakstudios/sink-lib':
         specifier: file:../../packages/lib
-        version: link:../../packages/lib
+        version: file:packages/lib(@sqlite.org/sqlite-wasm@3.51.2-build6)(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -178,16 +181,16 @@ importers:
 
   packages/lib:
     dependencies:
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
+    devDependencies:
       '@sqlite.org/sqlite-wasm':
         specifier: 3.51.2-build6
         version: 3.51.2-build6
       '@tanstack/db':
         specifier: ^0.5.30
         version: 0.5.30(typescript@5.9.3)
-      ws:
-        specifier: ^8.18.3
-        version: 8.19.0
-    devDependencies:
       '@types/node':
         specifier: ^24.4.0
         version: 24.12.0
@@ -197,6 +200,9 @@ importers:
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)
 
 packages:
 
@@ -2430,6 +2436,16 @@ packages:
 
   '@worldbreakstudios/sink-lib@0.1.1':
     resolution: {integrity: sha512-SgORDkAUb2fY7lMaNggmSztaRSMgrHwYcCr4YCvyoVxhjsEER7nZIx1YDGcRF30zsUKe4uVxcJ/8/YIMAMQfdg==}
+
+  '@worldbreakstudios/sink-lib@file:packages/lib':
+    resolution: {directory: packages/lib, type: directory}
+    peerDependencies:
+      '@sqlite.org/sqlite-wasm': 3.51.2-build6
+      '@tanstack/db': ^0.5.30
+      vite: ^7.3.1
+    peerDependenciesMeta:
+      vite:
+        optional: true
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -7267,6 +7283,17 @@ snapshots:
       - typescript
       - utf-8-validate
 
+  '@worldbreakstudios/sink-lib@file:packages/lib(@sqlite.org/sqlite-wasm@3.51.2-build6)(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))':
+    dependencies:
+      '@sqlite.org/sqlite-wasm': 3.51.2-build6
+      '@tanstack/db': 0.5.30(typescript@5.9.3)
+      ws: 8.19.0
+    optionalDependencies:
+      vite: 7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   accepts@2.0.0:
     dependencies:
       mime-types: 3.0.2
@@ -8137,7 +8164,7 @@ snapshots:
   h3@2.0.1-rc.16(crossws@0.4.4(srvx@0.11.13)):
     dependencies:
       rou3: 0.8.1
-      srvx: 0.11.12
+      srvx: 0.11.13
     optionalDependencies:
       crossws: 0.4.4(srvx@0.11.13)
 
@@ -9646,6 +9673,21 @@ snapshots:
       tinyglobby: 0.2.15
     optionalDependencies:
       '@types/node': 22.19.15
+      fsevents: 2.3.3
+      jiti: 2.6.1
+      lightningcss: 1.31.1
+      tsx: 4.21.0
+
+  vite@7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0):
+    dependencies:
+      esbuild: 0.27.3
+      fdir: 6.5.0(picomatch@4.0.3)
+      picomatch: 4.0.3
+      postcss: 8.5.8
+      rollup: 4.59.0
+      tinyglobby: 0.2.15
+    optionalDependencies:
+      '@types/node': 24.12.0
       fsevents: 2.3.3
       jiti: 2.6.1
       lightningcss: 1.31.1

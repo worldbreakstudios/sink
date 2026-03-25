@@ -191,58 +191,10 @@ function decodeRowValues(
 
 let sqlitePromise: Promise<Sqlite3Static> | null = null
 
-interface SqliteInitModule {
-  (config?: {
-    locateFile?: (path: string, prefix: string) => string
-  }): Promise<Sqlite3Static>
-}
-
-interface SqliteWorkerLike {
-  onmessage: ((event: unknown) => void) | null
-  postMessage(message: unknown): void
-}
-
-interface SqliteWorkerConstructorLike {
-  new (url: URL, options?: { type?: 'module' }): SqliteWorkerLike
-}
-
-function getBundledSqliteAssetUrl(path: string): URL {
-  switch (path) {
-    case 'sqlite3-worker1.mjs':
-      return new URL('./sqlite3-worker1.mjs', import.meta.url)
-    case 'sqlite3.wasm':
-      return new URL('./sqlite3.wasm', import.meta.url)
-    case 'sqlite3-opfs-async-proxy.js':
-      return new URL('./sqlite3-opfs-async-proxy.js', import.meta.url)
-    default:
-      throw new Error(`Unsupported bundled sqlite asset "${path}".`)
-  }
-}
-
-function locateBundledSqliteAsset(path: string): string {
-  return getBundledSqliteAssetUrl(path).href
-}
-
-function createBundledSqliteWorker(): SqliteWorkerLike {
-  const globals = globalThis as unknown as {
-    Worker?: SqliteWorkerConstructorLike
-  }
-
-  if (!globals.Worker) {
-    throw new Error('Web Workers are not available in this environment.')
-  }
-
-  return new globals.Worker(getBundledSqliteAssetUrl('sqlite3-worker1.mjs'), {
-    type: 'module',
-  })
-}
-
 async function loadSqlite(): Promise<Sqlite3Static> {
   if (sqlitePromise === null) {
     sqlitePromise = import('@sqlite.org/sqlite-wasm').then(({ default: init }) =>
-      (init as SqliteInitModule)({
-        locateFile: locateBundledSqliteAsset,
-      }),
+      init(),
     )
   }
 
@@ -666,7 +618,6 @@ export class OpfsDatabase {
     const sqliteModule = await import('@sqlite.org/sqlite-wasm') as unknown as {
       sqlite3Worker1Promiser: (config: {
         onready: () => void
-        worker?: SqliteWorkerLike
       }) => unknown
     }
     const { sqlite3Worker1Promiser } = sqliteModule
@@ -674,7 +625,6 @@ export class OpfsDatabase {
     const promiser = await new Promise<Promiser>((resolve) => {
       const p = sqlite3Worker1Promiser({
         onready: () => resolve(p as unknown as Promiser),
-        worker: createBundledSqliteWorker(),
       })
     })
 
