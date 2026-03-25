@@ -35,9 +35,6 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@sqlite.org/sqlite-wasm':
-        specifier: 3.51.2-build6
-        version: 3.51.2-build6
       '@tabler/icons-react':
         specifier: ^3.40.0
         version: 3.40.0(react@19.2.4)
@@ -73,7 +70,7 @@ importers:
         version: 1.167.3(@tanstack/react-router@1.168.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       '@worldbreakstudios/sink-lib':
         specifier: file:../../packages/lib
-        version: file:packages/lib(@sqlite.org/sqlite-wasm@3.51.2-build6)(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
+        version: file:packages/lib(typescript@5.9.3)(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -181,16 +178,16 @@ importers:
 
   packages/lib:
     dependencies:
-      ws:
-        specifier: ^8.18.3
-        version: 8.19.0
-    devDependencies:
       '@sqlite.org/sqlite-wasm':
         specifier: 3.51.2-build6
         version: 3.51.2-build6
       '@tanstack/db':
         specifier: ^0.5.30
         version: 0.5.30(typescript@5.9.3)
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
+    devDependencies:
       '@types/node':
         specifier: ^24.4.0
         version: 24.12.0
@@ -2440,8 +2437,6 @@ packages:
   '@worldbreakstudios/sink-lib@file:packages/lib':
     resolution: {directory: packages/lib, type: directory}
     peerDependencies:
-      '@sqlite.org/sqlite-wasm': 3.51.2-build6
-      '@tanstack/db': ^0.5.30
       vite: ^7.3.1
     peerDependenciesMeta:
       vite:
@@ -7283,7 +7278,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@worldbreakstudios/sink-lib@file:packages/lib(@sqlite.org/sqlite-wasm@3.51.2-build6)(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))':
+  '@worldbreakstudios/sink-lib@file:packages/lib(typescript@5.9.3)(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))':
     dependencies:
       '@sqlite.org/sqlite-wasm': 3.51.2-build6
       '@tanstack/db': 0.5.30(typescript@5.9.3)
@@ -7292,6 +7287,7 @@ snapshots:
       vite: 7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)
     transitivePeerDependencies:
       - bufferutil
+      - typescript
       - utf-8-validate
 
   accepts@2.0.0:

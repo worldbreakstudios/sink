@@ -31,7 +31,7 @@ npx tsx packages/cli-client/src/cli.ts generate --cwd apps/sandbox --watch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cwd <dir>` | `.` | Project root directory to search for schema files |
+| `--cwd <dir>` | `.` | Project root directory to search for schema files, resolved from the directory where you invoke `sink` |
 | `--out <path>` | `src/data/generated/schema.gen.ts` | Output file path (relative to `--cwd`) |
 | `--watch` | off | Watch for `.schema.ts` changes and regenerate automatically |
 
