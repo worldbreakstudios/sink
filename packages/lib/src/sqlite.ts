@@ -4,6 +4,11 @@ import type {
   SqlValue,
   Sqlite3Static,
 } from '@sqlite.org/sqlite-wasm'
+import {
+  createBrowserSqlitePromiser,
+  loadBrowserSqlite,
+  type BrowserSqliteRuntimeOptions,
+} from './browser-sqlite-runtime.js'
 
 type StructuredColumnKind = 'array' | 'object' | 'record'
 
@@ -189,18 +194,6 @@ function decodeRowValues(
   )
 }
 
-let sqlitePromise: Promise<Sqlite3Static> | null = null
-
-async function loadSqlite(): Promise<Sqlite3Static> {
-  if (sqlitePromise === null) {
-    sqlitePromise = import('@sqlite.org/sqlite-wasm').then(({ default: init }) =>
-      init(),
-    )
-  }
-
-  return sqlitePromise
-}
-
 export function isOpfsSupported(): boolean {
   const g = globalThis as Record<string, unknown>
   const nav = g.navigator as Record<string, unknown> | undefined
@@ -222,8 +215,11 @@ export class FrontendSqliteDatabase {
     this.#db = db
   }
 
-  static async createInMemory(filename = ':memory:') {
-    const sqlite = await loadSqlite()
+  static async createInMemory(
+    filename = ':memory:',
+    options?: { sqliteRuntime?: BrowserSqliteRuntimeOptions },
+  ) {
+    const sqlite = await loadBrowserSqlite(options?.sqliteRuntime)
     const db = new sqlite.oo1.DB(filename, 'ct')
 
     return new FrontendSqliteDatabase(sqlite, db)
@@ -235,8 +231,11 @@ export class FrontendSqliteDatabase {
    * Works on main thread without special headers.
    * Note: Only ONE localStorage database is supported per origin.
    */
-  static async createWithLocalStorage(storage: 'local' | 'session' = 'local') {
-    const sqlite = await loadSqlite()
+  static async createWithLocalStorage(
+    storage: 'local' | 'session' = 'local',
+    options?: { sqliteRuntime?: BrowserSqliteRuntimeOptions },
+  ) {
+    const sqlite = await loadBrowserSqlite(options?.sqliteRuntime)
     const JsStorageDb = (sqlite.oo1 as Record<string, unknown>)
       .JsStorageDb as new (storage: 'local' | 'session') => Database
 
@@ -608,25 +607,19 @@ export class OpfsDatabase {
    * Creates a database persisted to OPFS via a Web Worker.
    * Requires cross-origin isolation headers (COOP/COEP).
    */
-  static async create(filename: string): Promise<OpfsDatabase> {
+  static async create(
+    filename: string,
+    options?: { sqliteRuntime?: BrowserSqliteRuntimeOptions },
+  ): Promise<OpfsDatabase> {
     if (!isOpfsSupported()) {
       throw new Error(
         'OPFS is not supported in this environment. Ensure COOP/COEP headers are set.',
       )
     }
 
-    const sqliteModule = await import('@sqlite.org/sqlite-wasm') as unknown as {
-      sqlite3Worker1Promiser: (config: {
-        onready: () => void
-      }) => unknown
-    }
-    const { sqlite3Worker1Promiser } = sqliteModule
-
-    const promiser = await new Promise<Promiser>((resolve) => {
-      const p = sqlite3Worker1Promiser({
-        onready: () => resolve(p as unknown as Promiser),
-      })
-    })
+    const promiser = await createBrowserSqlitePromiser<Promiser>(
+      options?.sqliteRuntime,
+    )
 
     const configResponse = await promiser('config-get', {})
     const version = configResponse.result.version.libVersion
@@ -896,6 +889,7 @@ export interface CreateDatabaseOptions {
   preferredPersistence?: PersistenceType
   opfsFilename?: string
   localStorageType?: 'local' | 'session'
+  sqliteRuntime?: BrowserSqliteRuntimeOptions
 }
 
 /**
@@ -907,12 +901,15 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
     preferredPersistence = 'opfs',
     opfsFilename = 'app.db',
     localStorageType = 'local',
+    sqliteRuntime,
   } = options ?? {}
 
   // Try OPFS first if preferred and supported
   if (preferredPersistence === 'opfs' && isOpfsSupported()) {
     try {
-      const opfsDb = await OpfsDatabase.create(opfsFilename)
+      const opfsDb = await OpfsDatabase.create(opfsFilename, {
+        sqliteRuntime,
+      })
       return { database: opfsDb, persistenceType: 'opfs' }
     } catch (error) {
       console.warn('OPFS database creation failed, falling back to localStorage:', error)
@@ -922,7 +919,10 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   // Try localStorage
   if (preferredPersistence !== 'memory') {
     try {
-      const localDb = await FrontendSqliteDatabase.createWithLocalStorage(localStorageType)
+      const localDb = await FrontendSqliteDatabase.createWithLocalStorage(
+        localStorageType,
+        { sqliteRuntime },
+      )
       return {
         database: new SyncDatabaseAdapter(localDb),
         persistenceType: 'localStorage',
@@ -933,7 +933,9 @@ export async function createDatabase(options?: CreateDatabaseOptions): Promise<D
   }
 
   // Final fallback to in-memory
-  const memoryDb = await FrontendSqliteDatabase.createInMemory()
+  const memoryDb = await FrontendSqliteDatabase.createInMemory(':memory:', {
+    sqliteRuntime,
+  })
   return {
     database: new SyncDatabaseAdapter(memoryDb),
     persistenceType: 'memory',

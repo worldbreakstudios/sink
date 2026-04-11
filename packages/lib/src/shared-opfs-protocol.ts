@@ -53,6 +53,9 @@ export type DedicatedWorkerRequest =
       type: 'open'
       requestId: string
       filename: string
+      sqliteRuntime?: {
+        assetBaseUrl?: string
+      }
     }
   | {
       type: 'close'

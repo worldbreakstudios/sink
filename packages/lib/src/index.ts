@@ -1,3 +1,4 @@
+export type { BrowserSqliteRuntimeOptions } from './browser-sqlite-runtime.js'
 export * from './sqlite.js'
 export * from './sqlite-collection.js'
 export * from './sqlite-sync-core.js'

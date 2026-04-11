@@ -57,7 +57,9 @@ async function handleMessage(message: DedicatedWorkerRequest): Promise<void> {
       }
 
       await closeDatabase()
-      database = await OpfsDatabase.create(message.filename)
+      database = await OpfsDatabase.create(message.filename, {
+        sqliteRuntime: message.sqliteRuntime,
+      })
       activeFilename = message.filename
       postResponse({
         type: 'response',

@@ -4,12 +4,14 @@ Core SQLite utilities for building offline-first apps with TanStack DB.
 
 ## Standalone Browser Apps
 
-Browser apps should consume the packaged runtime instead of aliasing into `src`.
+Browser apps should consume Sink's packaged browser runtime. You should not need
+an app-local shim, a `public/` asset copy step, or an alias to
+`@sqlite.org/sqlite-wasm`.
 
-Install the browser peers in the app itself so the bundler can resolve their runtime assets directly:
+Install Sink and TanStack DB:
 
 ```sh
-pnpm add @worldbreakstudios/sink-lib @sqlite.org/sqlite-wasm @tanstack/db
+pnpm add @worldbreakstudios/sink-lib @tanstack/db
 ```
 
 ```ts
@@ -38,6 +40,24 @@ const { database } = await createSharedOpfsDatabase({
 - `worker.format = 'es'`
 - `optimizeDeps.exclude = ['@sqlite.org/sqlite-wasm', '@worldbreakstudios/sink-lib', '@worldbreakstudios/sink-lib/browser']`
 
+If you previously had a local SQLite shim, `public/vendor/sqlite` copy step, or
+custom alias to `@sqlite.org/sqlite-wasm`, you can delete that wiring once you
+upgrade.
+
+For unusual deployments you can override the asset base:
+
+```ts
+const { database } = await createSharedOpfsDatabase({
+  filename: 'app.db',
+  sqliteRuntime: {
+    assetBaseUrl: '/vendor/sink-sqlite/',
+  },
+})
+```
+
+`assetBaseUrl` is the shared-worker-safe override. The lower-level
+`workerFactory` hook is only available on the direct OPFS runtime path.
+
 If you want to develop against a local Sink checkout from another app repo, opt in explicitly:
 
 ```ts
@@ -49,7 +69,9 @@ export default defineConfig({
 })
 ```
 
-That mode adds source aliases and `server.fs.allow` for the provided Sink repo path. Production servers still need to send matching COOP/COEP headers if you use OPFS.
+That mode adds source aliases and `server.fs.allow` for the provided Sink repo
+path. Production servers still need to send matching COOP/COEP headers if you
+use OPFS.
 
 ## Schema Definition API
 

@@ -1,5 +1,9 @@
 import type { SqlValue } from '@sqlite.org/sqlite-wasm'
 import {
+  serializeBrowserSqliteRuntimeOptions,
+  type BrowserSqliteRuntimeOptions,
+} from './browser-sqlite-runtime.js'
+import {
   createDatabase,
   isOpfsSupported,
   type AsyncSqliteDatabase,
@@ -25,6 +29,7 @@ import { serializeWorkerError } from './shared-opfs-protocol.js'
 
 const ACTIVE_OWNER_LOCK_NAME = 'sink.shared-opfs.active-owner'
 const HEARTBEAT_INTERVAL_MS = 5_000
+const SHARED_OPFS_REQUEST_TIMEOUT_MS = 10_000
 const SHARED_OPFS_TAB_ID_STORAGE_KEY = 'sink.shared-opfs.tab-id'
 
 interface WorkerMessageEvent<TValue> {
@@ -115,6 +120,7 @@ interface Deferred<TValue> {
 export interface SharedOpfsDatabaseOptions {
   filename: string
   fallbackPersistence?: Exclude<PersistenceType, 'opfs'>
+  sqliteRuntime?: BrowserSqliteRuntimeOptions
 }
 
 export interface SharedOpfsSupportStatus {
@@ -132,13 +138,36 @@ export async function createSharedOpfsDatabase(
     return createDatabase({
       preferredPersistence: options.fallbackPersistence ?? 'localStorage',
       opfsFilename: options.filename,
+      sqliteRuntime: options.sqliteRuntime,
     })
   }
 
-  const database = await SharedWorkerSqliteDatabase.create(options.filename)
-  return {
-    database,
-    persistenceType: 'opfs',
+  if (options.sqliteRuntime?.workerFactory) {
+    throw new Error(
+      'sqliteRuntime.workerFactory is not supported in shared OPFS mode. Use sqliteRuntime.assetBaseUrl for shared deployments.',
+    )
+  }
+
+  try {
+    const database = await SharedWorkerSqliteDatabase.create(
+      options.filename,
+      options.sqliteRuntime,
+    )
+    return {
+      database,
+      persistenceType: 'opfs',
+    }
+  } catch (error) {
+    console.warn(
+      'Shared OPFS database creation failed, falling back to configured persistence:',
+      error,
+    )
+
+    return createDatabase({
+      preferredPersistence: options.fallbackPersistence ?? 'localStorage',
+      opfsFilename: options.filename,
+      sqliteRuntime: options.sqliteRuntime,
+    })
   }
 }
 
@@ -208,6 +237,7 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
   readonly version = 'shared-opfs'
   readonly #tabId = getOrCreateSharedOpfsTabId()
   readonly #filename: string
+  readonly #sqliteRuntime: ReturnType<typeof serializeBrowserSqliteRuntimeOptions>
   readonly #worker: WorkerLike
   readonly #coordinator: SharedWorkerLike
   readonly #port: MessagePortLike
@@ -220,8 +250,12 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
   #releaseActiveOwnerLock: (() => void) | null = null
   #roleTransition: Promise<void> = Promise.resolve()
 
-  private constructor(filename: string) {
+  private constructor(
+    filename: string,
+    sqliteRuntime?: BrowserSqliteRuntimeOptions,
+  ) {
     this.#filename = filename
+    this.#sqliteRuntime = serializeBrowserSqliteRuntimeOptions(sqliteRuntime)
     const globals = getSharedOpfsGlobals()
 
     if (!globals.Worker || !globals.SharedWorker) {
@@ -242,10 +276,20 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     this.#port = this.#coordinator.port
   }
 
-  static async create(filename: string): Promise<SharedWorkerSqliteDatabase> {
-    const database = new SharedWorkerSqliteDatabase(filename)
-    await database.initialize()
-    return database
+  static async create(
+    filename: string,
+    sqliteRuntime?: BrowserSqliteRuntimeOptions,
+  ): Promise<SharedWorkerSqliteDatabase> {
+    const database = new SharedWorkerSqliteDatabase(filename, sqliteRuntime)
+
+    try {
+      await database.initialize()
+      await database.request('execute', ['SELECT 1'])
+      return database
+    } catch (error) {
+      await database.close().catch(() => {})
+      throw error
+    }
   }
 
   async execute(sql: string, bind?: SqlValue[]): Promise<void> {
@@ -449,6 +493,7 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
         type: 'open',
         requestId: createRequestId(),
         filename: this.#filename,
+        sqliteRuntime: this.#sqliteRuntime,
       })
       this.#active = true
       this.#port.postMessage({
@@ -527,7 +572,10 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     }
 
     const requestId = createRequestId()
-    const deferred = createDeferred<SharedSqliteMethodResult[TMethod]>()
+    const deferred = createDeferred<SharedSqliteMethodResult[TMethod]>({
+      timeoutMs: SHARED_OPFS_REQUEST_TIMEOUT_MS,
+      timeoutMessage: `Timed out waiting for the shared OPFS coordinator while calling "${method}".`,
+    })
     this.#pendingCoordinatorRequests.set(requestId, deferred as Deferred<unknown>)
 
     this.#port.postMessage({
@@ -538,7 +586,9 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
       args,
     } satisfies CoordinatorClientMessage)
 
-    return deferred.promise
+    return deferred.promise.finally(() => {
+      this.#pendingCoordinatorRequests.delete(requestId)
+    })
   }
 
   private async requestWorker<
@@ -548,23 +598,57 @@ class SharedWorkerSqliteDatabase implements AsyncSqliteDatabase {
     _type: TMessage['type'],
     message: TMessage,
   ): Promise<TResult> {
-    const deferred = createDeferred<TResult>()
+    const deferred = createDeferred<TResult>({
+      timeoutMs: SHARED_OPFS_REQUEST_TIMEOUT_MS,
+      timeoutMessage: `Timed out waiting for the shared OPFS worker to handle "${message.type}".`,
+    })
     this.#pendingWorkerRequests.set(
       message.requestId,
       deferred as Deferred<unknown>,
     )
     this.#worker.postMessage(message)
-    return deferred.promise
+    return deferred.promise.finally(() => {
+      this.#pendingWorkerRequests.delete(message.requestId)
+    })
   }
 }
 
-function createDeferred<TValue>(): Deferred<TValue> {
-  let resolve!: (value: TValue) => void
-  let reject!: (error: unknown) => void
+function createDeferred<TValue>(options?: {
+  timeoutMs?: number
+  timeoutMessage?: string
+}): Deferred<TValue> {
+  let resolvePromise!: (value: TValue) => void
+  let rejectPromise!: (error: unknown) => void
+  let settled = false
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
   const promise = new Promise<TValue>((nextResolve, nextReject) => {
-    resolve = nextResolve
-    reject = nextReject
+    resolvePromise = nextResolve
+    rejectPromise = nextReject
   })
+
+  const settle = <TArg,>(callback: (value: TArg) => void) => (value: TArg) => {
+    if (settled) {
+      return
+    }
+
+    settled = true
+
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId)
+      timeoutId = null
+    }
+
+    callback(value)
+  }
+
+  const resolve = settle<TValue>(resolvePromise)
+  const reject = settle<unknown>(rejectPromise)
+
+  if (options?.timeoutMs) {
+    timeoutId = setTimeout(() => {
+      reject(new Error(options.timeoutMessage ?? 'Operation timed out.'))
+    }, options.timeoutMs)
+  }
 
   return {
     promise,
