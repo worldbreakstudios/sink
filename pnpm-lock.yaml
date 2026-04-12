@@ -69,8 +69,8 @@ importers:
         specifier: 1.167.3
         version: 1.167.3(@tanstack/react-router@1.168.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       '@worldbreakstudios/sink-lib':
-        specifier: 0.2.2
-        version: 0.2.2(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
+        specifier: 0.2.3
+        version: 0.2.3(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2434,8 +2434,8 @@ packages:
   '@worldbreakstudios/sink-lib@0.1.1':
     resolution: {integrity: sha512-SgORDkAUb2fY7lMaNggmSztaRSMgrHwYcCr4YCvyoVxhjsEER7nZIx1YDGcRF30zsUKe4uVxcJ/8/YIMAMQfdg==}
 
-  '@worldbreakstudios/sink-lib@0.2.2':
-    resolution: {integrity: sha512-ouajxu8H1ejNqBCDn9SSnKJVlPoZwe25G7wvASNcwBxyzru/PLNcxmaM6m7MhgAw9Kn7r1IHgJPBfCqiI1yO5w==}
+  '@worldbreakstudios/sink-lib@0.2.3':
+    resolution: {integrity: sha512-WwmZYZUMEfBTpQ3sp+NToRSwJTnZHVEQMQ9Dgg8Npa3/+ebeo5XNVHQWPU7ZAPkvp8uYJXbE+iD2I4IrwNHElg==}
     peerDependencies:
       '@tanstack/db': ^0.5.30
       vite: ^7.3.1
@@ -7279,7 +7279,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@worldbreakstudios/sink-lib@0.2.2(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))':
+  '@worldbreakstudios/sink-lib@0.2.3(@tanstack/db@0.5.30(typescript@5.9.3))(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0))':
     dependencies:
       '@sqlite.org/sqlite-wasm': 3.51.2-build6
       '@tanstack/db': 0.5.30(typescript@5.9.3)

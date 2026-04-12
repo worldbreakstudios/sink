@@ -95,7 +95,7 @@ function handlePortMessage(
       return
     }
     case 'heartbeat': {
-      const tab = tabs.get(message.tabId)
+      const tab = getConnectedTab(message.tabId, port)
 
       if (tab) {
         tab.lastSeenAt = message.sentAt
@@ -103,11 +103,11 @@ function handlePortMessage(
       return
     }
     case 'unregister': {
-      removeTab(message.tabId)
+      removeTab(message.tabId, port)
       return
     }
     case 'active-ready': {
-      const tab = tabs.get(message.tabId)
+      const tab = getConnectedTab(message.tabId, port)
 
       if (!tab || message.tabId !== activeTabId) {
         return
@@ -118,7 +118,7 @@ function handlePortMessage(
       return
     }
     case 'active-failed': {
-      const tab = tabs.get(message.tabId)
+      const tab = getConnectedTab(message.tabId, port)
 
       if (!tab) {
         return
@@ -138,11 +138,13 @@ function handlePortMessage(
       return
     }
     case 'db-request': {
-      const tab = tabs.get(message.tabId)
+      const tab = getConnectedTab(message.tabId, port)
 
-      if (tab) {
-        tab.lastSeenAt = Date.now()
+      if (!tab) {
+        return
       }
+
+      tab.lastSeenAt = Date.now()
 
       pendingRequests.push({
         requesterTabId: message.tabId,
@@ -156,6 +158,12 @@ function handlePortMessage(
       return
     }
     case 'db-response': {
+      const executor = getConnectedTab(message.executorTabId, port)
+
+      if (!executor) {
+        return
+      }
+
       const requester = tabs.get(message.requesterTabId)
 
       if (!requester) {
@@ -182,6 +190,14 @@ function handlePortMessage(
   }
 }
 
+function getConnectedTab(
+  tabId: string,
+  port: MessagePortLike,
+): ConnectedTab | null {
+  const tab = tabs.get(tabId)
+  return tab?.port === port ? tab : null
+}
+
 function cleanupStaleTabs(now: number): void {
   const staleTabIds = [...tabs.values()]
     .filter((tab) => now - tab.lastSeenAt > HEARTBEAT_TIMEOUT_MS)
@@ -203,7 +219,13 @@ function cleanupStaleTabs(now: number): void {
   notifyRoles()
 }
 
-function removeTab(tabId: string): void {
+function removeTab(tabId: string, port?: MessagePortLike): void {
+  const tab = tabs.get(tabId)
+
+  if (!tab || (port && tab.port !== port)) {
+    return
+  }
+
   tabs.delete(tabId)
 
   if (activeTabId === tabId) {
