@@ -45,6 +45,8 @@ npx tsx packages/cli-client/src/cli.ts generate --cwd apps/sandbox --watch
 
 ### Generated output
 
+The generator emits app-facing TypeScript helpers. It does not generate a runnable server entrypoint or pre-create a backend SQLite database file on disk. For sync setups, you still write a small server file that imports `createGeneratedSyncServerRuntime(...)`, and the SQLite file is created when the server opens it.
+
 The generated `schema.gen.ts` contains:
 
 #### Row type interfaces
