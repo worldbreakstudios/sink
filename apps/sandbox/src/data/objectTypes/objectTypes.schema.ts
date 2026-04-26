@@ -1,4 +1,4 @@
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('objectTypes', {
   name: v.string(),

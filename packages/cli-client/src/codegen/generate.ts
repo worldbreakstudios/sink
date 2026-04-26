@@ -62,35 +62,66 @@ export async function watch(options: GenerateOptions): Promise<void> {
 
   await generate(options)
 
-  let timeout: ReturnType<typeof setTimeout> | null = null
+  let lastSnapshot = await createWatchSnapshot(srcDir)
+  let checking = false
 
-  const rebuild = () => {
-    if (timeout) clearTimeout(timeout)
-    timeout = setTimeout(async () => {
-      try {
+  const poll = async () => {
+    if (checking) {
+      return
+    }
+
+    checking = true
+
+    try {
+      const nextSnapshot = await createWatchSnapshot(srcDir)
+
+      if (nextSnapshot !== lastSnapshot) {
+        lastSnapshot = nextSnapshot
         await generate(options)
-      } catch (err) {
-        console.error('Generate failed:', err)
       }
-    }, 100)
+    } catch (err) {
+      console.error('Generate failed:', err)
+    } finally {
+      checking = false
+    }
   }
 
-  const watcher = fs.watch(srcDir, { recursive: true }, (_event, filename) => {
-    if (
-      filename &&
-      (filename.endsWith('.schema.ts') ||
-        filename.endsWith('.policy.ts') ||
-        filename.endsWith('.queries.ts') ||
-        filename.endsWith('.mutations.ts'))
-    ) {
-      rebuild()
-    }
-  })
+  const interval = setInterval(() => {
+    void poll()
+  }, 250)
 
   console.log('Watching for schema/policy/query/mutation changes...')
 
-  process.on('SIGINT', () => {
-    watcher.close()
+  const close = () => {
+    clearInterval(interval)
     process.exit(0)
-  })
+  }
+
+  process.on('SIGINT', close)
+  process.on('SIGTERM', close)
+}
+
+async function createWatchSnapshot(srcDir: string): Promise<string> {
+  const files = await discoverWatchFiles(srcDir)
+  const snapshotEntries = await Promise.all(
+    files.map(async (file) => {
+      const stats = await fs.promises.stat(file)
+      return `${file}:${stats.mtimeMs}:${stats.size}`
+    }),
+  )
+
+  return snapshotEntries.join('\n')
+}
+
+async function discoverWatchFiles(srcDir: string): Promise<string[]> {
+  const fileGroups = await Promise.all([
+    discoverSchemaFiles(srcDir),
+    discoverPolicyFiles(srcDir),
+    discoverQueryFiles(srcDir),
+    discoverMutationFiles(srcDir),
+  ])
+
+  return [...new Set(fileGroups.flat())].sort((left, right) =>
+    left.localeCompare(right),
+  )
 }

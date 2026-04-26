@@ -1,6 +1,6 @@
 import type {
   GeneratedBrowserWorkspace,
-} from '@sink/lib'
+} from '@worldbreakstudios/sink-lib'
 import {
   clearSharedOpfsDatabase,
   createGeneratedBrowserWorkspace,
@@ -8,7 +8,7 @@ import {
   formatGeneratedWorkspaceKey,
   getGeneratedWorkspaceRowKey,
   serializeGeneratedWorkspaceKey,
-} from '@sink/lib'
+} from '@worldbreakstudios/sink-lib'
 import {
   SYNC_METADATA,
   createGeneratedSyncClient,

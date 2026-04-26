@@ -6,7 +6,7 @@ import {
   getEffectiveTableFieldNames,
   tableHasActorId,
   type TableDefinition,
-} from '@sink/lib'
+} from '@worldbreakstudios/sink-lib'
 
 export async function loadSchemaFiles(
   files: string[],

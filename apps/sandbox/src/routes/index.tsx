@@ -16,7 +16,7 @@ import {
   type SqliteExplorerSnapshot,
   type SqliteIndexSnapshot,
   type SyncClientSnapshot,
-} from '@sink/lib'
+} from '@worldbreakstudios/sink-lib'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -30,7 +30,7 @@ import {
   type SqliteDemoRow,
   type SqliteDemoTableName,
 } from '@/lib/sqlite-demo-collections'
-import type { SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteReferenceColumn } from '@worldbreakstudios/sink-lib'
 import {
   INDEXES,
   KEY_COLUMNS,
@@ -131,6 +131,7 @@ function App() {
   const [workspace, setWorkspace] =
     useState<SqliteDemoCollectionsWorkspace | null>(null)
   const workspaceRef = useRef<SqliteDemoCollectionsWorkspace | null>(null)
+  const loadSequenceRef = useRef(0)
   const [sqliteState, setSqliteState] = useState<{
     status: 'loading' | 'ready' | 'error'
     data?: SqliteExplorerSnapshot
@@ -173,30 +174,76 @@ function App() {
     [],
   )
 
-  const loadDemo = useCallback(async () => {
-    const nextWorkspace = await createSqliteDemoCollectionsWorkspace()
-    const previousWorkspace = workspaceRef.current
-    workspaceRef.current = nextWorkspace
-    setWorkspace(nextWorkspace)
+  const closeWorkspaceSafely = useCallback(
+    async (activeWorkspace: SqliteDemoCollectionsWorkspace | null) => {
+      if (!activeWorkspace) {
+        return
+      }
 
-    setActionError(null)
-    setResetError(null)
-    await refreshSnapshot(nextWorkspace)
-
-    if (previousWorkspace && previousWorkspace !== nextWorkspace) {
-      await previousWorkspace.close().catch((error) => {
+      await activeWorkspace.close().catch((error) => {
         if (!isExpectedShutdownError(error)) {
           console.error(error)
         }
       })
-    }
-  }, [refreshSnapshot])
+    },
+    [],
+  )
+
+  const loadDemo = useCallback(
+    async (loadSequence = loadSequenceRef.current) => {
+      let nextWorkspace: SqliteDemoCollectionsWorkspace | null = null
+
+      try {
+        nextWorkspace = await createSqliteDemoCollectionsWorkspace()
+
+        if (loadSequence !== loadSequenceRef.current) {
+          await closeWorkspaceSafely(nextWorkspace)
+          return null
+        }
+
+        const previousWorkspace = workspaceRef.current
+        workspaceRef.current = nextWorkspace
+        setWorkspace(nextWorkspace)
+
+        setActionError(null)
+        setResetError(null)
+        await refreshSnapshot(nextWorkspace)
+
+        if (loadSequence !== loadSequenceRef.current) {
+          workspaceRef.current =
+            workspaceRef.current === nextWorkspace ? previousWorkspace : workspaceRef.current
+          await closeWorkspaceSafely(nextWorkspace)
+          return null
+        }
+
+        if (previousWorkspace && previousWorkspace !== nextWorkspace) {
+          await closeWorkspaceSafely(previousWorkspace)
+        }
+
+        return nextWorkspace
+      } catch (error) {
+        if (nextWorkspace) {
+          if (workspaceRef.current === nextWorkspace) {
+            workspaceRef.current = null
+            setWorkspace(null)
+          }
+
+          await closeWorkspaceSafely(nextWorkspace)
+        }
+
+        throw error
+      }
+    },
+    [closeWorkspaceSafely, refreshSnapshot],
+  )
 
   useEffect(() => {
-    let cancelled = false
+    const loadSequence = loadSequenceRef.current + 1
+    loadSequenceRef.current = loadSequence
+    setSqliteState({ status: 'loading' })
 
-    loadDemo().catch((error: unknown) => {
-      if (!cancelled) {
+    loadDemo(loadSequence).catch((error: unknown) => {
+      if (loadSequence === loadSequenceRef.current) {
         setSqliteState({
           status: 'error',
           error: formatUnknownError(error),
@@ -205,19 +252,18 @@ function App() {
     })
 
     return () => {
-      cancelled = true
+      if (loadSequence === loadSequenceRef.current) {
+        loadSequenceRef.current += 1
+      }
+
       const currentWorkspace = workspaceRef.current
       workspaceRef.current = null
 
       if (currentWorkspace) {
-        void currentWorkspace.close().catch((error) => {
-          if (!isExpectedShutdownError(error)) {
-            console.error(error)
-          }
-        })
+        void closeWorkspaceSafely(currentWorkspace)
       }
     }
-  }, [loadDemo])
+  }, [closeWorkspaceSafely, loadDemo])
 
   useEffect(() => {
     if (!workspace) {

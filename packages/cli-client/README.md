@@ -1,4 +1,4 @@
-# @sink/cli-client
+# @worldbreakstudios/sink-cli
 
 CLI tooling for the sink workspace. Provides the `sink` command with schema code generation.
 
@@ -7,7 +7,7 @@ CLI tooling for the sink workspace. Provides the `sink` command with schema code
 The CLI is available as the `sink` bin after building:
 
 ```bash
-pnpm --filter @sink/cli-client run build
+pnpm --filter @worldbreakstudios/sink-cli run build
 ```
 
 ## Commands
@@ -31,7 +31,7 @@ npx tsx packages/cli-client/src/cli.ts generate --cwd apps/sandbox --watch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cwd <dir>` | `.` | Project root directory to search for schema files |
+| `--cwd <dir>` | `.` | Project root directory to search for schema files, resolved from the directory where you invoke `sink` |
 | `--out <path>` | `src/data/generated/schema.gen.ts` | Output file path (relative to `--cwd`) |
 | `--watch` | off | Watch for `.schema.ts` changes and regenerate automatically |
 
@@ -44,6 +44,8 @@ npx tsx packages/cli-client/src/cli.ts generate --cwd apps/sandbox --watch
 5. **Write** — Writes the output file and creates a `.gitignore` in the output directory to exclude generated files from version control
 
 ### Generated output
+
+The generator emits app-facing TypeScript helpers. It does not generate a runnable server entrypoint or pre-create a backend SQLite database file on disk. For sync setups, you still write a small server file that imports `createGeneratedSyncServerRuntime(...)`, and the SQLite file is created when the server opens it.
 
 The generated `schema.gen.ts` contains:
 
@@ -109,7 +111,7 @@ Insert helpers accept `Omit<Row, 'id'>` since the primary key is auto-incremente
 
 ```ts
 // src/data/notes.schema.ts
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('notes', {
   id: v.id(),
@@ -121,4 +123,4 @@ export default defineTable('notes', {
 }, { orderBy: 'id ASC' })
 ```
 
-See the [`@sink/lib` README](../lib/README.md) for the full list of supported validators.
+See the [`@worldbreakstudios/sink-lib` README](../lib/README.md) for the full list of supported validators.

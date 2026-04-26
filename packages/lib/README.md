@@ -1,6 +1,77 @@
-# @sink/lib
+# @worldbreakstudios/sink-lib
 
 Core SQLite utilities for building offline-first apps with TanStack DB.
+
+## Standalone Browser Apps
+
+Browser apps should consume Sink's packaged browser runtime. You should not need
+an app-local shim, a `public/` asset copy step, or an alias to
+`@sqlite.org/sqlite-wasm`.
+
+Install Sink and TanStack DB:
+
+```sh
+pnpm add @worldbreakstudios/sink-lib @tanstack/db
+```
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import { sinkVite } from '@worldbreakstudios/sink-lib/vite'
+
+export default defineConfig({
+  plugins: [sinkVite()],
+})
+```
+
+```ts
+// app.ts
+import { createSharedOpfsDatabase } from '@worldbreakstudios/sink-lib/browser'
+
+const { database } = await createSharedOpfsDatabase({
+  filename: 'app.db',
+  fallbackPersistence: 'localStorage',
+})
+```
+
+`sinkVite()` wires in the Vite settings Sink needs for browser sqlite:
+
+- COOP/COEP dev and preview headers
+- `worker.format = 'es'`
+- `optimizeDeps.exclude = ['@sqlite.org/sqlite-wasm', '@worldbreakstudios/sink-lib', '@worldbreakstudios/sink-lib/browser']`
+
+If you previously had a local SQLite shim, `public/vendor/sqlite` copy step, or
+custom alias to `@sqlite.org/sqlite-wasm`, you can delete that wiring once you
+upgrade.
+
+For unusual deployments you can override the asset base:
+
+```ts
+const { database } = await createSharedOpfsDatabase({
+  filename: 'app.db',
+  sqliteRuntime: {
+    assetBaseUrl: '/vendor/sink-sqlite/',
+  },
+})
+```
+
+`assetBaseUrl` is the shared-worker-safe override. The lower-level
+`workerFactory` hook is only available on the direct OPFS runtime path.
+
+If you want to develop against a local Sink checkout from another app repo, opt in explicitly:
+
+```ts
+import { defineConfig } from 'vite'
+import { sinkVite } from '@worldbreakstudios/sink-lib/vite'
+
+export default defineConfig({
+  plugins: [sinkVite({ localSourceRoot: '../sink' })],
+})
+```
+
+That mode adds source aliases and `server.fs.allow` for the provided Sink repo
+path. Production servers still need to send matching COOP/COEP headers if you
+use OPFS.
 
 ## Schema Definition API
 
@@ -12,7 +83,7 @@ Creates a table definition. Each file should have a single `defineTable` as its 
 
 ```ts
 // notes.schema.ts
-import { defineTable, v } from '@sink/lib'
+import { defineTable, v } from '@worldbreakstudios/sink-lib'
 
 export default defineTable('notes', {
   id: v.id(),
@@ -78,7 +149,7 @@ db.close()
 Creates a TanStack DB collection backed by a SQLite table, enabling reactive queries with `useLiveQuery`.
 
 ```ts
-import { createSqliteCollection } from '@sink/lib'
+import { createSqliteCollection } from '@worldbreakstudios/sink-lib'
 
 const collection = createSqliteCollection<MyRow, number>({
   id: 'my-collection',

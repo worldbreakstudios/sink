@@ -6,6 +6,10 @@ This repo is set up as a workspace repo with three modules:
 - `packages/lib`: a frontend-focused TypeScript library built on SQLite Wasm
 - `apps/sandbox`: a TanStack Start app for testing the library locally
 
+Kickoff guide for using Sink from another repo:
+
+- [`docs/kickoff-with-sink.md`](docs/kickoff-with-sink.md)
+
 ## Getting started
 
 With `npm`:

@@ -1,29 +1,33 @@
 {
-  "name": "@sink/cli-client",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@worldbreakstudios/sink-cli",
+  "version": "0.1.1",
   "type": "module",
+  "publishConfig": {
+    "access": "private"
+  },
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "bin": {
-    "sink": "./dist/cli.js"
+    "sink": "dist/cli.js"
   },
   "files": [
     "dist",
-    "src"
+    "README.md"
   ],
   "scripts": {
     "build": "tsup --config tsup.config.ts",
     "cli": "tsx src/cli.ts",
     "lint": "tsc --project tsconfig.json --noEmit",
-    "typecheck": "tsc --project tsconfig.json --noEmit"
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "prepare": "npm run build"
   },
   "dependencies": {
-    "@sink/lib": "workspace:*",
+    "@worldbreakstudios/sink-lib": "0.1.1",
     "glob": "^11.0.0",
     "jiti": "^2.4.2"
   },

@@ -1,4 +1,4 @@
-import type { AsyncSqliteDatabase } from '@sink/lib'
+import type { AsyncSqliteDatabase } from '@worldbreakstudios/sink-lib'
 
 const SANDBOX_FAKER_SEED = 20260322
 const SANDBOX_ACTOR_COUNT = 3

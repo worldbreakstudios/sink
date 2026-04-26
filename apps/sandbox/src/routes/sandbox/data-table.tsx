@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@sink/lib'
+import type { SqliteIndexDefinition, SqliteReferenceColumn } from '@worldbreakstudios/sink-lib'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { CodeBlock } from '@/components/ui/code-block'

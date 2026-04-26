@@ -1,36 +1,23 @@
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
-import { fileURLToPath } from 'node:url'
 
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 
 import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { nitro } from 'nitro/vite'
+import { sinkVite } from '@worldbreakstudios/sink-lib/vite'
 
 const config = defineConfig({
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
   optimizeDeps: {
-    exclude: ['@sqlite.org/sqlite-wasm'],
     include: ['@tanstack/db'],
   },
-  worker: {
-    format: 'es',
-  },
   resolve: {
-    alias: {
-      '@sink/lib/server': fileURLToPath(new URL('../../packages/lib/src/server.ts', import.meta.url)),
-      '@sink/lib': fileURLToPath(new URL('../../packages/lib/src/index.ts', import.meta.url)),
-    },
     dedupe: ['@tanstack/db'],
   },
   plugins: [
+    sinkVite(),
     devtools(),
     nitro({
       rollupConfig: { external: [/^@sentry\//] },

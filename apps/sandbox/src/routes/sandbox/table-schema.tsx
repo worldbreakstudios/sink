@@ -1,4 +1,4 @@
-import type { SqliteIndexSnapshot } from '@sink/lib'
+import type { SqliteIndexSnapshot } from '@worldbreakstudios/sink-lib'
 import { CardContent } from '@/components/ui/card'
 
 export function TableSchema({
